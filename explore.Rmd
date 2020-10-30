@@ -206,7 +206,9 @@ patient_obs_long %>%
   theme(axis.text.y = element_blank())
 ```
 
-## Missing data heatmap
+## Heatmap of number of observations per lab
+Numbers in the cells represent the number of patients with that particular number of oberservations.
+This is especially relevant for ML/modelling tasks where having a subtantial number of samples is important. 
 ```{r fig.width=12}
 per_lab %>% 
   select(lab, n_obs, both_severities, severe, nonsevere) %>% 
@@ -235,7 +237,9 @@ per_lab %>%
 
 ```
 
-
+## Heatmap of % patients with X number of obeservations per lab
+This figures tells us the porportion of (all, nonsevere and severe) patients with X number of observations.
+From this we can infer if particular labs are more utilised in different groups of patients
 ```{r fig.width=12}
 per_lab %>% 
   select(lab, n_obs, prop_both, prop_severe, prop_nonsevere) %>% 

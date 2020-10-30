@@ -24,12 +24,10 @@ theme_set(theme_bw() +
 and convert to wide format
 ```{R message=FALSE}
 #4CE long format Labs Data
-patient_obs <- read_csv('penn-data/labs_long_thrombo.csv') %>% 
+patient_obs <- read_csv('penn-data/labs_long_thrombo_v2.csv') %>% 
   mutate(severity = (severe_ind == 1) %>% 
            as_factor() %>% 
-           fct_recode('nonsevere' = 'FALSE', 'severe' = 'TRUE')) %>% 
-  rename('value' = new_value2,
-         'patient_num' = pat_deid)
+           fct_recode('nonsevere' = 'FALSE', 'severe' = 'TRUE'))
 
 #Code, Descriptions and Ranges
 lab_mapping <- read_csv('public-data/loinc-map.csv')
@@ -37,8 +35,8 @@ lab_mapping <- read_csv('public-data/loinc-map.csv')
 
 ```{R}
 patient_obs_wide <- patient_obs %>% 
-  left_join(lab_mapping, by = c('loinc_code' = 'LOINC')) %>% 
-  select(- loinc_code) %>% 
+  left_join(lab_mapping, by = c('concept_code' = 'LOINC')) %>% 
+  select(- concept_code) %>% 
   pivot_wider(id_cols = c(patient_num, days_since_admission, severity),
               names_from = short_name,
               values_from = value,

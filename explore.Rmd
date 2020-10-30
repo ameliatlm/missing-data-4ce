@@ -11,6 +11,9 @@ library(readr)
 library(dplyr)
 library(tidyr)
 library(forcats)
+library(DT)
+library(tibble)
+library(cowplot)
 
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
@@ -19,7 +22,7 @@ theme_set(theme_bw() +
 
 ## Read in files 
 and convert to wide format
-```{R}
+```{R message=FALSE}
 #4CE long format Labs Data
 patient_obs <- read_csv('simulated-data/patients-observations.csv')
 #IDs of severe subject and date of the first severe event
@@ -38,7 +41,37 @@ patient_obs_wide <- patient_obs %>%
               values_fn = mean)
 
 #check NAs in the Wide format
-sum(is.na(patient_obs_wide))
+na_stats <- patient_obs_wide %>% 
+  select(- c(patient_num, days_since_admission)) %>% 
+  is.na() %>% 
+  `!` 
+
+na_df <- data.frame(value_existed = colSums(na_stats), 
+           prop_existed = colMeans(na_stats)) %>% 
+  rownames_to_column('lab') %>% 
+  mutate(prop_na = 1 - prop_existed,
+         lab = fct_reorder(lab, value_existed))
+
+n_values <- na_df %>% 
+  ggplot(aes(x = value_existed, y = lab)) +
+  geom_col() + 
+  labs(x = 'Number of values', y = NULL)
+
+na_prob <- na_df %>%
+  rename('Valid value' = prop_existed, 'NA' = prop_na) %>% 
+  pivot_longer(c(`Valid value`, `NA`)) %>% 
+  ggplot(aes(x = value, y = lab, fill = name)) +
+  geom_col() + 
+  scale_fill_discrete(guide = guide_legend(reverse = TRUE)) +
+  labs(x = 'Proportion', y = NULL) +
+  # guides(fill = guide_legend(reverse = TRUE))
+  theme(
+    axis.text.y = element_blank(),
+    legend.key.width = unit(6, 'mm'),
+    legend.key.height = unit(4, 'mm'),
+    legend.position = 'bottom')
+
+plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
 ```
 
 ## Number of observation (days) per patient
@@ -54,7 +87,9 @@ days_count_min_max <- patient_obs_wide %>%
   mutate(time_obs = max - min,
          severity = patient_num %in% unique(severity$covid_id)) 
 
-summary(days_count_min_max$n)
+n_severe <- sum(days_count_min_max$severity)
+n_nonsevere <- sum(!days_count_min_max$severity)
+   summary(days_count_min_max$n)
 ```
 
 ## Histogram of the number of days with at least one observation
@@ -107,17 +142,10 @@ per_lab <- patient_obs_long %>%
   ungroup() %>% 
   pivot_wider(names_from = severity, values_from = n, values_fill = 0) %>% 
   mutate(both_severities = nonsevere + severe) %>% 
-  group_by(lab) %>% 
-  # mutate(total = sum(both_severities)) %>% 
-  # ungroup() %>% 
-  mutate(prop_nonsevere = nonsevere/sum(nonsevere),
-         prop_severe = severe/sum(severe),
-         prop_both = both_severities/sum(both_severities)) %>% 
-  ungroup()
-  
-```
+  mutate(prop_nonsevere = nonsevere/n_nonsevere,
+         prop_severe = severe/n_severe,
+         prop_both = both_severities/nrow(days_count_min_max))
 
-```{r}
 lab_medians <-
   patient_obs_long %>% 
   add_count(lab, name = 'total_obs') %>% 
@@ -139,12 +167,18 @@ lab_medians <-
   distinct() %>% 
   pivot_wider(names_from = severity, values_from = each_med_obs_per_patient) %>% 
   rename('median_obs_per_severe_patient' = severe,
-         'median_obs_per_non_severe_patient' = nonsevere)
+         'median_obs_per_non_severe_patient' = nonsevere) %>% 
+  select(lab, total_obs, total_patients, starts_with('med'), starts_with('n_'))
 
+lab_medians %>% 
+  datatable(rownames = FALSE)
 ```
 
-```{r}
-colnames(lab_medians)
+`n_greater0` shows the number of patients who had more observations than the median.
+`n_greater1` shows the number of patients who had more observations than the median + 1.
+`n_greater2` shows the number of patients who had more observations than the median + 2.
+
+```{r eval=FALSE, include=FALSE}
 lab_medians %>% 
   select(lab, total_obs, total_patients) %>%
   pivot_longer(- lab) %>% 
@@ -154,17 +188,22 @@ lab_medians %>%
   labs(y = NULL)
 ```
 
+In the figure below:
 
-```{r fig.width=12}
+- Dash line: `Reference Low`
+- Solid line: `Reference High`
+
+```{r fig.width=9, fig.height=11}
 patient_obs_long %>% 
   left_join(lab_mapping, by = c('lab' = 'short_name')) %>% 
-  ggplot(aes(x = severity, y = value, fill = severity)) +
+  ggplot(aes(y = severity, x = value, fill = severity)) +
   geom_violin() +
-  geom_hline(aes(yintercept = `Reference Low`), linetype = 'dashed') +
-  scale_fill_brewer(palette = 'Dark2') +
-  geom_hline(aes(yintercept = `Reference High`)) +
-  facet_wrap(~ lab, scales = 'free') +
-  theme(legend.position = 'None')
+  geom_vline(aes(xintercept = `Reference Low`), linetype = 'dashed') +
+  scale_fill_brewer(palette = 'Dark2', guide = guide_legend(reverse = TRUE)) +
+  labs(y = NULL, x = NULL) +
+  geom_vline(aes(xintercept = `Reference High`)) +
+  facet_wrap(~ lab, scales = 'free', ncol = 2, strip.position = 'left') +
+  theme(axis.text.y = element_blank())
 ```
 
 ## Missing data heatmap
@@ -172,6 +211,11 @@ patient_obs_long %>%
 per_lab %>% 
   select(lab, n_obs, both_severities, severe, nonsevere) %>% 
   pivot_longer(c(both_severities, severe, nonsevere)) %>% 
+  mutate(name = name %>% fct_recode(
+    'All patients' = 'both_severities',
+    'Severe patients' = 'severe',
+    'Non-severe patients' = 'nonsevere'
+  )) %>% 
   ggplot(aes(x = n_obs, fill = value, y = fct_reorder(lab, n_obs))) + 
   geom_tile(colour = "white", size = 0.2)+
   geom_text(aes(label = value), colour = "white", size = 2) +
@@ -196,13 +240,18 @@ per_lab %>%
 per_lab %>% 
   select(lab, n_obs, prop_both, prop_severe, prop_nonsevere) %>% 
   pivot_longer(c(prop_both, prop_severe, prop_nonsevere)) %>% 
+  mutate(name = name %>% fct_recode(
+    'Compared to all patients' = 'prop_both',
+    'Compared to all severe patients' = 'prop_severe',
+    'Compared to all non-severe patients' = 'prop_nonsevere'
+  )) %>% 
   ggplot(aes(x = n_obs, fill = value, y = fct_reorder(lab, n_obs))) + 
   geom_tile(colour = "white", size = 0.2)+
   geom_text(aes(label = round(value, 2)), colour = "white", size = 2) +
   scale_y_discrete(expand = c(0, 0)) +
   scale_x_continuous(expand = c(0, 0),
                      breaks = c(1:max(per_lab$n_obs)),
-                     labels = c(1:max(per_lab$n_obs)))+
+                     labels = c(1:max(per_lab$n_obs)))+ 
   scale_fill_gradient(low = "lightgrey", high = "darkblue",
                       labels = scales::percent_format(accuracy = 1L)) +
   facet_wrap(~ name, nrow = 1) +
@@ -214,7 +263,12 @@ per_lab %>%
   )
 ```
 
+Denominator: total number of patients, total number of non-severe patients,
+and total number of severe patients, respectively.
 
 ```{r}
 sessionInfo()
 ```
+
+
+

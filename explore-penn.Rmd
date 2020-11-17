@@ -18,8 +18,6 @@ library(cowplot)
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
                   panel.grid.minor = element_blank()))
-
-
 ```
 
 ## Read in files 
@@ -91,6 +89,8 @@ na_prob <- na_df %>%
     legend.position = 'bottom')
 
 plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
+
+penn_na_df <- na_df
 ```
 
 ## Number of observation (days) per patient
@@ -98,29 +98,39 @@ plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
 days_count_min_max <- patient_obs_wide %>%
   group_by(patient_num, severity) %>%
   summarise(
-    n = n_distinct(days_since_admission),
-    min = min(days_since_admission),
-    max = max(days_since_admission),
+    n_values = n_distinct(days_since_admission),
+    min_day = min(days_since_admission),
+    max_day = max(days_since_admission),
     .groups = 'drop'
   ) %>% 
-  mutate(time_obs = max - min) 
+  mutate(time_obs = max_day - min_day) %>% 
+  select(-patient_num) %>% 
+  add_count(severity, name = 'n_severity') 
+
+penn_agg_n_values <- days_count_min_max %>% 
+  count(severity, n_severity, n_values,
+        name = 'n_nvals')
+penn_agg_max_day <- days_count_min_max %>% 
+  count(severity, n_severity, max_day,
+        name = 'n_maxday')
 
 (n_severe <- sum(days_count_min_max$severity == 'severe'))
 (n_nonsevere <- sum(days_count_min_max$severity == 'nonsevere'))
-summary(days_count_min_max$n)
+# summary(days_count_min_max$n_values)
+
+save(penn_na_df, penn_agg_n_values, penn_agg_max_day,
+     file = 'results/penn-results.Rdata')
 ```
 
 ## Histogram of the number of days with at least one observation
 ```{R}
-days_bar <- days_count_min_max %>% 
-  ggplot(aes(x = n, fill = severity)) +
-  geom_bar(alpha = 0.5) +
+penn_agg_n_values %>% 
+  ggplot(aes(x = n_values, y = n_nvals, fill = severity)) +
+  geom_col(alpha = 0.5) +
   scale_fill_brewer(palette = 'Dark2', direction = -1) +
   labs(fill = 'Severe?', 
        x = "Number of days with data", 
        y = "Count")
-
-days_bar
 ```
 
 ## Histogram of length of stay
@@ -128,15 +138,13 @@ i.e. last day with observation-first day with observation
 
 We need to check for readmission here.
 ```{R}
-period_bar <- days_count_min_max %>% 
-  ggplot(aes(x = time_obs, fill = severity)) +
-  geom_bar(alpha = 0.5) +
+penn_agg_max_day %>% 
+  ggplot(aes(x = max_day, y = n_maxday, fill = severity)) +
+  geom_col(alpha = 0.5) +
   scale_fill_brewer(palette = 'Dark2', direction = -1) +
   labs(fill = 'Severe?', 
-       x = "Length of stay (last day - first day)", 
+       x = "Number of days with data", 
        y = "Count")
-
-period_bar
 ```
 
 ## Analyze missingness and frequency of measures for each lab
@@ -188,6 +196,7 @@ lab_medians %>%
   datatable(rownames = FALSE)
 ```
 
+
 `n_greater0` shows the number of patients who had more observations than the median.
 `n_greater1` shows the number of patients who had more observations than the median + 1.
 `n_greater2` shows the number of patients who had more observations than the median + 2.
@@ -204,8 +213,10 @@ lab_medians %>%
 
 In the figure below:
 
-- Dash line: `Reference Low`
-- Solid line: `Reference High`
+- Grey dash line: `Reference Low`
+- Grey solid line: `Reference High`
+- Black dash line: `lower bound outlier` (QC)
+- Black solid line: `upper bound outlier` (QC)
 
 ```{r fig.width=9, fig.height=11}
 patient_obs_long %>% 
@@ -252,44 +263,38 @@ per_lab %>%
         legend.position = c(0.93, 0.2),
         axis.ticks.y = element_blank()
   )
-
 ```
 
+"Binned" heatmap: every 15 days
 
-```{r}
-per_lab %>% 
-  select(lab, n_obs, severe, nonsevere) %>% 
-  filter(n_obs <= 90) %>%
-  pivot_longer(c(severe, nonsevere)) %>% 
-  mutate(lab = fct_reorder(lab, n_obs),
-         name = name %>% fct_recode(
+```{r fig.width=12}
+per_lab %>%
+  mutate(obs_bin = cut(n_obs, breaks = 15, include.lowest = TRUE)) %>% 
+  group_by(lab, obs_bin) %>% 
+  summarise(both_severities = sum(both_severities), 
+            severe = sum(severe), 
+            nonsevere = sum(nonsevere), 
+            .groups = 'drop') %>% 
+  select(lab, obs_bin, both_severities, severe, nonsevere) %>% 
+  pivot_longer(c(both_severities, severe, nonsevere)) %>% 
+  mutate(name = name %>% fct_recode(
+    'All patients' = 'both_severities',
     'Severe patients' = 'severe',
     'Non-severe patients' = 'nonsevere'
   )) %>% 
-  ggplot(aes(x = n_obs, fill = name, y = value)) + 
-  geom_col() +
-  scale_fill_brewer(palette = 'Dark2', direction = -1) +
-  # geom_tile(colour = "white", size = 0.2)+
-  # geom_text(aes(label = value), colour = "white", size = 2) +
-  # scale_y_discrete(expand = c(0, 0))+
-  # scale_x_continuous(expand = c(0, 0),
-  #                    breaks = c(1:max(per_lab$n_obs)),
-  #                    labels = c(1:max(per_lab$n_obs))) +
-  # scale_fill_gradient(low = "lightgrey", high = "darkblue",
-  #                     limits = c(0, max(per_lab$both_severities))) +
-  # facet_grid(rows = vars(lab), scales = 'free_y', space = 'free') +
-  facet_wrap(~ lab, scales = 'free') +
-  labs(x = 'Number of values a patient has for each lab',
+  ggplot(aes(x = obs_bin, fill = value, y = fct_reorder(lab, value))) + 
+  geom_tile(colour = "white", size = 0.2) +
+  geom_text(aes(label = value), colour = "white", size = 2) +
+  scale_y_discrete(expand = c(0, 0))+
+  scale_fill_gradient(low = "lightgrey", high = "darkblue") +
+  facet_wrap(~ name, nrow = 1) +
+  labs(x = 'Binned number of values a patient has for each lab',
        y = NULL, fill = '# patients') +
   theme(panel.grid.major = element_blank(),
-        legend.position = c(0.9, 0.2),
+        legend.position = c(0.93, 0.2),
+        axis.text.x = element_text(angle = 90, hjust = 1),
         axis.ticks.y = element_blank()
   )
-```
-
-```{r}
-boxplot(per_lab$n_obs)
-sum(per_lab$n_obs > 90)
 ```
 
 ```{r fig.width=12}
@@ -313,9 +318,40 @@ per_lab %>%
                       labels = scales::percent_format(accuracy = 1L)) +
   facet_wrap(~ name, nrow = 1) +
   labs(x = 'Number of values a patient has for each lab',
-       y = NULL, fill = '# patients') +
+       y = NULL, fill = '% patients') +
   theme(panel.grid.major = element_blank(),
         legend.position = c(0.93, 0.2),
+        axis.ticks.y = element_blank()
+  )
+```
+
+```{r fig.width=12}
+per_lab %>%
+  mutate(obs_bin = cut(n_obs, breaks = 15, include.lowest = TRUE)) %>% 
+  group_by(lab, obs_bin) %>% 
+  summarise(prop_both = sum(prop_both), 
+            prop_severe = sum(prop_severe), 
+            prop_nonsevere = sum(prop_nonsevere), 
+            .groups = 'drop') %>% 
+  select(lab, obs_bin, prop_both, prop_severe, prop_nonsevere) %>% 
+  pivot_longer(c(prop_both, prop_severe, prop_nonsevere)) %>% 
+  mutate(name = name %>% fct_recode(
+    'Compared to all patients' = 'prop_both',
+    'Compared to all severe patients' = 'prop_severe',
+    'Compared to all non-severe patients' = 'prop_nonsevere'
+  )) %>% 
+  ggplot(aes(x = obs_bin, fill = value, y = fct_reorder(lab, value))) + 
+  geom_tile(colour = "white", size = 0.2) +
+  geom_text(aes(label = round(value, 2)), colour = "white", size = 2) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_gradient(low = "lightgrey", high = "darkblue",
+                      labels = scales::percent_format(accuracy = 1L)) +
+  facet_wrap(~ name, nrow = 1) +
+  labs(x = 'Binned number of values a patient has for each lab',
+       y = NULL, fill = '% patients') +
+  theme(panel.grid.major = element_blank(),
+        legend.position = c(0.93, 0.2),
+        axis.text.x = element_text(angle = 90, hjust = 1),
         axis.ticks.y = element_blank()
   )
 ```
@@ -324,8 +360,28 @@ Denominator: total number of patients, total number of non-severe patients,
 and total number of severe patients, respectively.
 
 ```{r}
-sessionInfo()
+per_lab %>% 
+  select(lab, n_obs, severe, nonsevere) %>% 
+  filter(n_obs <= 90) %>%
+  pivot_longer(c(severe, nonsevere)) %>% 
+  mutate(lab = fct_reorder(lab, n_obs),
+         name = name %>% fct_recode(
+    'Severe patients' = 'severe',
+    'Non-severe patients' = 'nonsevere'
+  )) %>% 
+  ggplot(aes(x = n_obs, fill = name, y = value)) + 
+  geom_col() +
+  scale_fill_brewer(palette = 'Dark2', direction = -1) +
+  facet_wrap(~ lab, scales = 'free') +
+  labs(x = 'Number of values a patient has for each lab',
+       y = NULL, fill = '# patients') +
+  theme(panel.grid.major = element_blank(),
+        legend.position = c(0.9, 0.2),
+        axis.ticks.y = element_blank()
+  )
 ```
 
 
-
+```{r}
+sessionInfo()
+```

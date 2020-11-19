@@ -2,8 +2,9 @@
 title: "Missingness analysis"
 author: Amelia Tan, Arianna Dagliati, Trang Le
 date: "27 October 2020"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 ---
-
 
 ```{r setup, warning=FALSE, message=FALSE}
 library(ggplot2)

@@ -17,7 +17,6 @@ library(tibble)
 library(cowplot)
 library(ggridges)
 
-
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
                   panel.grid.minor = element_blank()))
@@ -25,6 +24,7 @@ theme_set(theme_bw() +
 
 ## Read in files 
 and convert to wide format
+
 ```{R message=FALSE}
 #4CE long format Labs Data
 patient_obs <- read_csv('penn-data/labs_long_thrombo_v2.csv') %>% 
@@ -34,21 +34,8 @@ patient_obs <- read_csv('penn-data/labs_long_thrombo_v2.csv') %>%
 
 #Code, Descriptions and Ranges
 lab_mapping <- read_csv('public-data/loinc-map.csv')
-load('public-data/lab.range.rda')
+lab_bounds <- read_csv('public-data/lab_bounds.csv')
 # load('public-data/code.dict.rda')
-```
-
-```{r}
-lab_bounds <- lab.range[, -1] %>% 
-  colMeans() %>% 
-  data.frame(value = .) %>% 
-  rownames_to_column() %>% 
-  separate(col = rowname, into = c('LOINC', 'bound'), sep = '_') %>% 
-  mutate(LOINC = gsub('loinc', '', LOINC) %>% gsub('\\.', '-', .),
-         value = exp(value)) %>% 
-  pivot_wider(names_from = 'bound', values_from = 'value') %>%
-  left_join(lab_mapping, by = 'LOINC') %>%
-  {.}
 ```
 
 ```{R}

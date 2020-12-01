@@ -1,0 +1,80 @@
+---
+title: "Combine results across sites"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(DT)
+library(rcartocolor)
+library(tibble)
+library(cowplot)
+library(ggridges)
+
+theme_set(theme_bw() + 
+            theme(legend.title = element_blank(),
+                  panel.grid.minor = element_blank()))
+```
+
+## Read in files 
+and convert to wide format
+
+```{R message=FALSE}
+#Code, Descriptions and Ranges
+lab_mapping <- read_csv('public-data/loinc-map.csv')
+lab_bounds <- read_csv('public-data/lab_bounds.csv')
+# load('public-data/code.dict.rda')
+load('results/frbdx-results.Rdata')
+load('results/penn-results.Rdata')
+load('results/ICSM-results.Rdata')
+```
+
+```{r}
+na_df <- bind_rows(
+  penn_na_df %>% mutate(site = 'Penn'), 
+  ICSM_na_df %>% mutate(site = 'ICSM'), 
+  frbdx_na_df %>% mutate(site = 'Bordeaux'))
+
+n_values <- na_df %>% 
+  ggplot(aes(x = value_existed, y = lab, fill = site)) +
+  geom_col(position = 'dodge', width = 0.5) + 
+  scale_fill_carto_d(guide = FALSE) +
+  labs(x = 'Number of values', y = NULL)
+n_values
+na_prob <- na_df %>%
+  # rename('Valid value' = prop_existed, 'NA' = prop_na) %>% 
+  # pivot_longer(c(`Valid value`, `NA`)) %>% 
+  ggplot(aes(x = prop_existed, y = lab, color = site)) +
+  # geom_col(position = 'dodge') +
+  geom_point(position = position_dodge(width = 0.4)) +
+  geom_errorbarh(
+    aes(xmin = 0, xmax = prop_existed, 
+        y = lab),
+    height = 0,
+    position = position_dodge(width = 0.4)) +
+  scale_color_carto_d() +
+  # coord_flip() + 
+  # scale_fill_carto_d() +
+  # scale_fill_discrete(guide = guide_legend(reverse = TRUE)) +
+  labs(x = 'Valid value proportion', y = NULL) +
+  # guides(fill = guide_legend(reverse = TRUE))
+  theme(
+    axis.text.y = element_blank(),
+    legend.key.width = unit(6, 'mm'),
+    legend.key.height = unit(4, 'mm'),
+    legend.position = 'bottom')
+na_prob
+plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
+
+```
+
+Bordeaux has a lab that is NA? Will check with Bertrand.
+
+
+
+

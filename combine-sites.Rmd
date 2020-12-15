@@ -51,13 +51,15 @@ na_prob <- na_df %>%
   # pivot_longer(c(`Valid value`, `NA`)) %>% 
   ggplot(aes(x = prop_existed, y = lab, color = site)) +
   # geom_col(position = 'dodge') +
-  geom_point(position = position_dodge(width = 0.4)) +
   geom_errorbarh(
     aes(xmin = 0, xmax = prop_existed, 
         y = lab),
     height = 0,
     position = position_dodge(width = 0.4)) +
+  geom_point(position = position_dodge(width = 0.4)) +
   scale_color_carto_d() +
+  scale_x_continuous(breaks = seq(0, 1, 0.2),
+                     labels = scales::percent_format()) +
   # coord_flip() + 
   # scale_fill_carto_d() +
   # scale_fill_discrete(guide = guide_legend(reverse = TRUE)) +
@@ -69,8 +71,8 @@ na_prob <- na_df %>%
     legend.key.height = unit(4, 'mm'),
     legend.position = 'bottom')
 na_prob
-plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
-
+comb_plots <- plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
+ggsave('figs/na_comb.png', comb_plots, height = 4, width = 6)
 ```
 
 Bordeaux has a lab that is NA? Will check with Bertrand.

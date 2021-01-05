@@ -113,99 +113,29 @@ mean(patient_obs_wide[, -(1:3)] %>% is.na())
 ```
 
 ```{r}
-
-```
-
-```{r}
 library(Amelia)
 to_impute <- as.data.frame(patient_obs_wide) %>% 
   select(-severity)
 imputed_patient_obs <- Amelia::amelia(
   to_impute, m = 5,
-  ts = 'days_since_admission', #polytime = 2,
+  ts = 'days_since_admission', polytime = 2,
   # intercs = TRUE,
   # cs = c('patient_num'),
-  idvars =  c('patient_num', 'severity')
+  idvars =  c('patient_num')
   )
-
+plot(imputed_patient_obs, which.vars=3:12)
 # Amelia::combine.output(imputed_patient_obs)
 
 multiple_imps <- do.call(rbind, imputed_patient_obs$imputations)
 ```
 
-
+MICE
 ```{r}
-str(imputed_patient_obs)
-
-
-p_comps = list()
-for (vari in labs_to_keep[1:3]){
-  vari = "ALT"
-  print(vari)
-  print(Amelia::compare.density(imputed_patient_obs, var = vari))
-
-}
-cowplot::plot_grid(p_comps)
-p_comps[[1]]
-labs_to_keep
-vari = "Albumin"
-
-
-
-p_comps = list()
-par(mfrow=c(3,1))
-for (vari in labs_to_keep[1:2]){
-  res <- trang_overimpute(imputed_patient_obs, var = vari)
-  xplot = res$xplot
-  means = res$means
-  xlab = res$xlab
-  ci.order = res$ci.order
-  ylab = res$ylab
-  this.ylim = res$this.ylim
-  main = res$main
-  color = res$color
-  lowers = res$lowers
-  uppers = res$uppers
-  # p_comps[[vari]] <- ~{
-    # par(
-    #   mar = c(3, 3, 1, 1),
-    #   mgp = c(2, 1, 0)
-    # )
-    plot(xplot[ci.order], means[ci.order], xlab = xlab, 
-                     ylab = ylab, ylim = this.ylim, type = "p", main = main, 
-                     col = color[ci.order], pch = 19)
-    segments(xplot[ci.order], lowers[ci.order], xplot[ci.order], 
-             uppers[ci.order], col = color[ci.order])
-    # if (legend) {
-    #   legend(legpos, legend = c(" 0-.2", ".2-.4", ".4-.6", 
-    #                             ".6-.8", ".8-1"), col = spectrum, lty = c(1, 1), 
-    #          horiz = TRUE, bty = "n")
-    # }
-    abline(0, 1)
-  # }
-}
-cowplot::plot_grid(p_comps)
-par(mfrow=c(3,1))
-
-ggdraw(p_comps[[1]])
-p_comps[[2]]
-p_comps[[2]]
-
-p1_formula <- ~{
-  boxplot(mpg ~ cyl, xlab = "cyl", ylab = "mpg", data = mtcars)
-  abline(0, 1)
-}
-ggdraw(p1_formula)
-p1_formula
-p_comps[[1]]
-class(p1_formula)
-class(p_comps[[1]])
-
-dev.off()
-p_comps[[2]]
-
-str(p_comps[[1]])
+# library(mice)
+# tempData <- mice::mice(to_impute,m=5,maxit=25,meth='pmm',seed=500)
+# densityplot(tempData)
 ```
+
 
 ```{r}
 p_comps = list()
@@ -282,7 +212,7 @@ melt_patient_lab %>%
 
 ## Number of observation (days) per patient
 ```{R}
-days_count_min_max <- patient_obs_wide %>%
+days_count_min_max <- multiple_imps %>%
   group_by(patient_num, severity) %>%
   summarise(
     n_values = n_distinct(days_since_admission),
@@ -304,8 +234,9 @@ penn_agg_max_day <- days_count_min_max %>%
 (n_severe <- sum(days_count_min_max$severity == 'severe'))
 (n_nonsevere <- sum(days_count_min_max$severity == 'nonsevere'))
 
-save(penn_na_df, penn_agg_n_values, penn_agg_max_day, penn_patient_lab,
-     file = 'results/penn-results.Rdata')
+# save(penn_na_df, penn_agg_n_values, penn_agg_max_day, penn_patient_lab,
+#      multiple_imps,
+#      file = 'results/penn-results.Rdata')
 ```
 
 ## Histogram of the number of days with at least one observation

@@ -113,39 +113,43 @@ mean(patient_obs_wide[, -(1:3)] %>% is.na())
 ```
 
 ```{r}
-library(Amelia)
-to_impute <- as.data.frame(patient_obs_wide) %>% 
-  select(-severity)
-imputed_patient_obs <- Amelia::amelia(
-  to_impute, m = 5,
-  ts = 'days_since_admission', polytime = 2,
-  # intercs = TRUE,
-  # cs = c('patient_num'),
-  idvars =  c('patient_num')
-  )
-plot(imputed_patient_obs, which.vars=3:12)
-# Amelia::combine.output(imputed_patient_obs)
-
-multiple_imps <- do.call(rbind, imputed_patient_obs$imputations)
+# library(Amelia)
+# to_impute <- as.data.frame(patient_obs_wide) %>% 
+#   # select(-severity) %>% 
+#   {.}
+# imputed_patient_obs <- Amelia::amelia(
+#   to_impute, m = 1, #m = 5,
+#   ts = 'days_since_admission', polytime = 2,
+#   # intercs = TRUE,
+#   # cs = c('patient_num'),
+#   idvars =  c('patient_num', 'severity')
+#   )
+# plot(imputed_patient_obs, which.vars=4:12)
+# # Amelia::combine.output(imputed_patient_obs)
+# 
+# multiple_imps <- do.call(rbind, imputed_patient_obs$imputations)
 ```
 
 MICE
 ```{r}
-# library(mice)
-# tempData <- mice::mice(to_impute,m=5,maxit=25,meth='pmm',seed=500)
-# densityplot(tempData)
+# # library(mice)
+# # tempData <- mice::mice(to_impute,m=5,maxit=25,meth='pmm',seed=500)
+# # densityplot(tempData)
+# par(mfrow=c(1, 1))
+# fluxplot(to_impute)
+# xyplot(tempData)
 ```
 
 
 ```{r}
-p_comps = list()
-dev.off()
-par(mfrow=c(3,4))
-for (vari in labs_to_keep){
-  p_comps[[vari]] = trang_overimpute(imputed_patient_obs, var = vari)
-}
-str(p_comps[[1]])
-par(mfrow=c(1, 1))
+# p_comps = list()
+# dev.off()
+# par(mfrow=c(3,4))
+# for (vari in labs_to_keep){
+#   p_comps[[vari]] = trang_overimpute(imputed_patient_obs, var = vari)
+# }
+# str(p_comps[[1]])
+# par(mfrow=c(1, 1))
 ```
 
 
@@ -212,7 +216,9 @@ melt_patient_lab %>%
 
 ## Number of observation (days) per patient
 ```{R}
-days_count_min_max <- multiple_imps %>%
+days_count_min_max <- 
+  # multiple_imps %>%
+  patient_obs_wide %>% 
   group_by(patient_num, severity) %>%
   summarise(
     n_values = n_distinct(days_since_admission),
@@ -221,8 +227,8 @@ days_count_min_max <- multiple_imps %>%
     .groups = 'drop'
   ) %>% 
   mutate(time_obs = max_day - min_day) %>% 
-  select(-patient_num) %>% 
-  add_count(severity, name = 'n_severity') 
+  # select(-patient_num) %>% 
+  add_count(severity, name = 'n_severity')
 
 penn_agg_n_values <- days_count_min_max %>% 
   count(severity, n_severity, n_values,
@@ -231,12 +237,14 @@ penn_agg_max_day <- days_count_min_max %>%
   count(severity, n_severity, max_day,
         name = 'n_maxday')
 
+penn_agg_n_values %>% 
+  ggplot(aes(x = n_nvals)) +
+  geom_bar()
+
 (n_severe <- sum(days_count_min_max$severity == 'severe'))
 (n_nonsevere <- sum(days_count_min_max$severity == 'nonsevere'))
 
-# save(penn_na_df, penn_agg_n_values, penn_agg_max_day, penn_patient_lab,
-#      multiple_imps,
-#      file = 'results/penn-results.Rdata')
+
 ```
 
 ## Histogram of the number of days with at least one observation
@@ -442,3 +450,10 @@ per_lab %>%
 ```{r}
 sessionInfo()
 ```
+
+```{r}
+save(penn_na_df, penn_agg_n_values, penn_agg_max_day, penn_patient_lab,
+     # multiple_imps,
+     file = 'results/penn-results.Rdata')
+```
+

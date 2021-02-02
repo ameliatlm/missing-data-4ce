@@ -32,13 +32,15 @@ lab_bounds <- read_csv('public-data/lab_bounds.csv')
 load('results/frbdx-results.Rdata')
 load('results/penn-results.Rdata')
 load('results/ICSM-results.Rdata')
+load('results/nwu-results.Rdata')
 ```
 
 ```{r}
 na_df <- bind_rows(
   penn_na_df %>% mutate(site = 'Penn'), 
   ICSM_na_df %>% mutate(site = 'ICSM'), 
-  frbdx_na_df %>% mutate(site = 'Bordeaux'))
+  frbdx_na_df %>% mutate(site = 'Bordeaux'),
+  nwu_na_df %>% mutate(site = 'NWU'))
 
 n_values <- na_df %>% 
   ggplot(aes(x = value_existed, y = lab, fill = site)) +
@@ -70,8 +72,9 @@ na_prob <- na_df %>%
     legend.key.width = unit(6, 'mm'),
     legend.key.height = unit(4, 'mm'),
     legend.position = 'bottom')
-na_prob
+
 comb_plots <- plot_grid(n_values, na_prob, nrow = 1, axis = 'b', align = 'h')
+comb_plots
 ggsave('figs/na_comb.png', comb_plots, height = 4, width = 6)
 ```
 

@@ -51,9 +51,9 @@ demo_raw <-
     file.path(my_dir, 'LocalPatientSummary.csv'),
     col_types = list(patient_num = readr::col_character()),
     na = '1900-01-01'
-  ) %>%
+  ) %>% 
+  mutate(across(ends_with('_date') & where(is.character), lubridate::mdy)) %>% 
   mutate(
-    last_discharge_date = lubridate::mdy(last_discharge_date),
     last_discharge_date = if_else(
       !is.na(death_date) & death_date < last_discharge_date,
       death_date,

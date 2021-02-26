@@ -156,6 +156,10 @@ set.seed(1)
 m <- LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
 ```
 
+```{r}
+library(ldatuning)
+library(textmineR)
+```
 
 ## LDA visualization
 ```{r}
@@ -171,7 +175,6 @@ json = createJSON(phi = phi, theta = theta, vocab = vocab,
      doc.length = doc.length, term.frequency = term.freq)
 serVis(json)
 ```
-
 
 ```{r}
 terms(m, 5)
@@ -201,3 +204,60 @@ topdoc = names(topic.docs)[1]
 # rownames(tpp) = tpp$President
 # heatmap(as.matrix(tpp[-1]))
 ```
+
+
+
+```{r}
+x_dfm <- x_mat %>%
+  rownames_to_column('id') %>% 
+  pivot_longer(- id, names_to = 'lab', values_to = 'n') %>% 
+  cast_dfm(id, lab, n)
+# x_dfm <- tidy_sherlock %>%
+#   count(story, word, sort = TRUE) %>%
+#   cast_dfm(story, word, n)
+
+# x_sparse <- tidy_sherlock %>%
+#   count(story, word, sort = TRUE) %>%
+#   cast_sparse(story, word, n)
+
+# topic_model <- stm(x_dfm, K = 6, 
+#                    verbose = FALSE, init.type = "Spectral")
+
+system.time(
+  many_models <- data_frame(K = seq(2, 20, 3)) %>%
+    mutate(topic_model = future_map(K, ~stm(x_dfm, K = .,seed = 1,
+                                            verbose = FALSE)))
+)
+
+heldout <- make.heldout(x_dfm)
+
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, x_dfm),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, x_dfm),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result
+
+
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be 3")
+
+```
+

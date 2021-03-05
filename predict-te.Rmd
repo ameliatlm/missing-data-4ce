@@ -8,6 +8,7 @@ knit: (function(inputFile, encoding) {
 
 ```{r setup, warning=FALSE, message=FALSE}
 my_dir <- '../4ce/Input'
+# install.packages('stm', 'tidytext', 'furrr')
 
 library(ggplot2)
 library(readr)
@@ -19,9 +20,9 @@ library(tibble)
 library(cowplot)
 # library(ggridges)
 library(lubridate)
-library(topicmodels)
-library(LDAvis)   
-
+# library(topicmodels)
+# library(LDAvis)   
+library(stm)
 
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
@@ -60,7 +61,6 @@ demo_raw <-
       last_discharge_date
     )
   )
-
 ```
 
 ```{r}
@@ -71,7 +71,8 @@ thrombo_codes <- read_csv('https://raw.githubusercontent.com/covidclinical/Phase
   
 thrombo_patients <- patient_obs_raw %>% 
   filter(concept_type == 'DIAG-ICD10',
-         concept_code %in% thrombo_codes) %>% 
+         concept_code %in% thrombo_codes,
+         days_since_admission >= 0) %>% 
   select(- days_since_admission) %>% 
   distinct()
 
@@ -152,82 +153,23 @@ print(paste("test-error=", err))
 
 ## Unsupervised learning: LDA
 ```{r}
-set.seed(1)
-m <- LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
+# set.seed(1)
+# m <- topicmodels::LDA(x_mat, method = "Gibbs", k = 8,  control = list(alpha = 0.1))
 ```
-
-```{r}
-library(ldatuning)
-library(textmineR)
-```
-
-## LDA visualization
-```{r}
-# m = LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
-dtm <- x_mat[slam::row_sums(x_mat) > 0, ]
-phi <- as.matrix(posterior(m)$terms)
-theta <- as.matrix(posterior(m)$topics)
-vocab <- colnames(phi)
-doc.length = slam::row_sums(dtm)
-term.freq = slam::col_sums(dtm)[match(vocab, colnames(dtm))]
-
-json = createJSON(phi = phi, theta = theta, vocab = vocab,
-     doc.length = doc.length, term.frequency = term.freq)
-serVis(json)
-```
-
-```{r}
-terms(m, 5)
-topic = 1
-words = posterior(m)$terms[topic, ]
-topwords = head(sort(words, decreasing = T), n=50)
-head(topwords)
-
-head(posterior(m)$topics)
-
-topic_mat <- posterior(m)$topics
-cor.test(topic_mat[,1], as.numeric(missing_by_patient$TE))
-cor.test(topic_mat[,2], as.numeric(missing_by_patient$TE))
-cor.test(topic_mat[,3], as.numeric(missing_by_patient$TE))
-cor.test(topic_mat[,4], as.numeric(missing_by_patient$TE))
-cor.test(topic_mat[,5], as.numeric(missing_by_patient$TE))
-
-topic.docs = topic_mat[, topic] 
-topic.docs = sort(topic.docs, decreasing=T)
-head(topic.docs)
-
-topdoc = names(topic.docs)[1]
-# topdoc_corp = corp[docnames(corp) == topdoc]
-# texts(topdoc_corp)
-# docs = docvars(x_mat)[match(rownames(x_mat), docnames(x_mat)),]
-# tpp = aggregate(posterior(m)$topics, by=docs["President"], mean)
-# rownames(tpp) = tpp$President
-# heatmap(as.matrix(tpp[-1]))
-```
-
-
 
 ```{r}
 x_dfm <- x_mat %>%
   rownames_to_column('id') %>% 
   pivot_longer(- id, names_to = 'lab', values_to = 'n') %>% 
-  cast_dfm(id, lab, n)
-# x_dfm <- tidy_sherlock %>%
-#   count(story, word, sort = TRUE) %>%
-#   cast_dfm(story, word, n)
+  tidytext::cast_dfm(id, lab, n)
 
-# x_sparse <- tidy_sherlock %>%
-#   count(story, word, sort = TRUE) %>%
-#   cast_sparse(story, word, n)
-
-# topic_model <- stm(x_dfm, K = 6, 
-#                    verbose = FALSE, init.type = "Spectral")
-
-system.time(
-  many_models <- data_frame(K = seq(2, 20, 3)) %>%
-    mutate(topic_model = future_map(K, ~stm(x_dfm, K = .,seed = 1,
-                                            verbose = FALSE)))
-)
+system.time(many_models <- data.frame(K = seq(2, 8, 1)) %>%
+              mutate(topic_model = furrr::future_map(K, ~ stm(
+                x_dfm,
+                K = .,
+                seed = TRUE,
+                verbose = FALSE
+              ))))
 
 heldout <- make.heldout(x_dfm)
 
@@ -241,9 +183,6 @@ k_result <- many_models %>%
          lbound = bound + lfact,
          iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
 
-k_result
-
-
 k_result %>%
   transmute(K,
             `Lower bound` = lbound,
@@ -252,12 +191,62 @@ k_result %>%
             `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
   gather(Metric, Value, -K) %>%
   ggplot(aes(K, Value, color = Metric)) +
-  geom_line(size = 1.5, show.legend = FALSE) +
+  geom_line() +
+  geom_point() +
+  guides(color = FALSE) +
+  scale_x_continuous(breaks = seq(2,12, 2)) +
   facet_wrap(~Metric, scales = "free_y") +
   labs(x = "K (number of topics)",
        y = NULL,
        title = "Model diagnostics by number of topics",
-       subtitle = "These diagnostics indicate that a good number of topics would be 3")
+       subtitle = "These diagnostics indicate that a good number of topics is 4")
 
+beepr::beep()
 ```
 
+```{r}
+stmfit <- stm(x_dfm, K = 4, verbose = FALSE, init.type = "Spectral", seed = TRUE)
+# plot.STM(stmfit,typeC="summary",xlim=c(0,0.1))
+```
+
+```{r}
+# labelTopics(stmfit)
+exclusivity <- function(mod.out, M=10, frexw=.7){
+  w <- frexw
+  if(length(mod.out$beta$logbeta)!=1) stop("Exclusivity calculation only designed for models without content covariates")
+  tbeta <- t(exp(mod.out$beta$logbeta[[1]]))
+  s <- rowSums(tbeta)
+  mat <- tbeta/s #normed by columns of beta now.
+
+  ex <- apply(mat,2,rank)/nrow(mat)
+  fr <- apply(tbeta,2,rank)/nrow(mat)
+  frex<- 1/(w/ex + (1-w)/fr)
+  index <- apply(tbeta, 2, order, decreasing=TRUE)[1:M,]
+  out <- vector(length=ncol(tbeta)) 
+  for(i in 1:ncol(frex)) {
+    out[i] <- sum(frex[index[,i],i])
+  }
+  out
+}
+topicQuality(stmfit,documents=x_dfm)
+```
+
+```{r}
+beta_mat <- exp(stmfit$beta$logbeta[[1]])
+colnames(beta_mat) <- stmfit$vocab
+rownames(beta_mat) <- paste('Topic', 1:4)
+heatmap(t(beta_mat))
+```
+
+```{r}
+theta <- stmfit$theta
+cor.test(theta[,1], as.numeric(missing_by_patient$TE))
+cor.test(theta[,2], as.numeric(missing_by_patient$TE))
+cor.test(theta[,3], as.numeric(missing_by_patient$TE))
+cor.test(theta[,4], as.numeric(missing_by_patient$TE))
+```
+
+```{r}
+# x_docs = quanteda::convert(x_dfm, to = 'lda')
+# toLDAvis(mod=stmfit, docs=x_docs$documents)
+```

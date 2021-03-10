@@ -23,6 +23,8 @@ library(lubridate)
 # library(topicmodels)
 # library(LDAvis)   
 library(stm)
+library(xgboost)
+library(e1071)
 
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
@@ -85,71 +87,98 @@ patient_obs_wide <- patient_obs %>%
   pivot_wider(id_cols = c(patient_num, days_since_admission),
               names_from = short_name,
               values_from = value,
-              values_fn = mean) %>% 
-  filter(days_since_admission <= 10,
-         days_since_admission >= 0) # 10-day window
-
-missing_by_patient <- patient_obs_wide %>% 
-  group_by(patient_num) %>% 
-  summarise(across(- days_since_admission, function(x) sum(!is.na(x)))) %>% 
-  left_join(demo_df, by = 'patient_num')
-
-summary(missing_by_patient)
-
-uniq_vals <- apply(missing_by_patient, 2, function(x) length(unique(x)))
-missing_by_patient <- missing_by_patient[, uniq_vals > 1]
-lab_names <- intersect(lab_bounds$short_name, names(missing_by_patient))
+              values_fn = mean)
+outcome <- "TE"
 ```
 
 ## Supervised learning
 ```{r}
 # install.packages("xgboost")
-outcome <- "TE"
-
-library(xgboost)
-library(e1071)
-
 set.seed(1)
-x_mat <- missing_by_patient[, lab_names]
-n_patients <- nrow(missing_by_patient)
-train_idx <- sample.int(n_patients, floor(n_patients*0.8))
-x_train <- as.matrix(missing_by_patient[train_idx,  lab_names])
-y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
-
-x_test <- as.matrix(missing_by_patient[- train_idx, lab_names])
-y_test <- missing_by_patient[- train_idx, outcome, drop = TRUE]
-
-bstDense <- xgboost(
-  data = x_train,
-  label = y_train,
-  max_depth = 2,
-  eta = 0.5,
-  nthread = 3,
-  nrounds = 20,
-  objective = "binary:logistic",
-  verbose = 2
+upper_days <- c(0:3, seq(6, 25, 3))
+err_xgbs <- vector('numeric')
+err_svms <- vector('numeric')
+for (upper_day in upper_days) {
+  missing_by_patient <- patient_obs_wide %>%
+    filter(days_since_admission <= upper_day, # 10-day window
+           days_since_admission >= 0) %>%
+    group_by(patient_num) %>%
+    summarise(across(-days_since_admission, function(x)
+      sum(!is.na(x)))) %>%
+    left_join(demo_df, by = 'patient_num')
+  
+  summary(missing_by_patient)
+  
+  uniq_vals <-
+    apply(missing_by_patient, 2, function(x)
+      length(unique(x)))
+  missing_by_patient <- missing_by_patient[, uniq_vals > 1]
+  lab_names <-
+    intersect(lab_bounds$short_name, names(missing_by_patient))
+  
+  x_mat <- missing_by_patient[, lab_names]
+  n_patients <- nrow(missing_by_patient)
+  train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
+  x_train <- as.matrix(missing_by_patient[train_idx,  lab_names])
+  y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
+  
+  x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
+  y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
+  
+  bstDense <- xgboost(
+    data = x_train,
+    label = y_train,
+    max_depth = 2,
+    eta = 0.5,
+    nthread = 3,
+    nrounds = 20,
+    objective = "binary:logistic",
+    verbose = 2
+  )
+  
+  pred <- as.numeric(predict(bstDense, x_test) > 0.5)
+  err_xgb <- mean(as.numeric(pred > 0.5) != y_test)
+  
+  # mean(y_test)
+  # importance_matrix <- xgb.importance(model = bstDense)
+  # print(importance_matrix)
+  
+  # dat = data.frame(x = x_train, y = y_train)
+  svmfit = svm(
+    x = x_train,
+    y = y_train,
+    type = 'C',
+    kernel = "linear",
+    cost = 10,
+    scale = FALSE
+  )
+  # print(svmfit)
+  # svmfit$call
+  
+  y_pred <- predict(svmfit, x_test)
+  err_svm <- mean(y_pred != y_test)
+  err_xgbs <- c(err_xgbs, err_xgb)
+  err_svms <- c(err_svms, err_svm)
+}
+# print(paste("test-error=", err_xgb))
+# print(paste("test-error=", err_svm))
+# beepr::beep()
+errors_df <- data.frame(
+  upper_day = upper_days,
+  err_xgb = err_xgbs,
+  err_svms = err_svms
 )
-
-pred <- as.numeric(predict(bstDense, x_test) > 0.5)
-err_xgb <- mean(as.numeric(pred > 0.5) != y_test)
-
-
-mean(y_test)
-importance_matrix <- xgb.importance(model = bstDense)
-print(importance_matrix)
-
-# dat = data.frame(x = x_train, y = y_train)
-svmfit = svm(x = x_train, y = y_train, type = 'C', kernel = "linear", cost = 10, scale = FALSE)
-print(svmfit)
-svmfit$call
-
-y_pred <- predict(svmfit, x_test)
-err <- mean(y_pred != y_test)
-
-print(paste("test-error=", err_xgb))
-print(paste("test-error=", err))
 # plot(svmfit, y ~ ., dat)
+
+errors_df %>% 
+  pivot_longer(- upper_day) %>% 
+  ggplot(aes(x = upper_day, y = value, color = name)) +
+  geom_line() +
+  geom_point()
 ```
+
+
+
 
 ## Unsupervised learning: LDA
 ```{r}
@@ -200,8 +229,8 @@ k_result %>%
        y = NULL,
        title = "Model diagnostics by number of topics",
        subtitle = "These diagnostics indicate that a good number of topics is 4")
-
-beepr::beep()
+# 
+# beepr::beep()
 ```
 
 ```{r}
@@ -235,7 +264,8 @@ topicQuality(stmfit,documents=x_dfm)
 beta_mat <- exp(stmfit$beta$logbeta[[1]])
 colnames(beta_mat) <- stmfit$vocab
 rownames(beta_mat) <- paste('Topic', 1:4)
-heatmap(t(beta_mat))
+heatmap(t(beta_mat), Rowv = NA, Colv = NA)
+save(beta_mat, file = 'results/beta_matrix.Rdata')
 ```
 
 ```{r}
@@ -246,6 +276,10 @@ cor.test(theta[,3], as.numeric(missing_by_patient$TE))
 cor.test(theta[,4], as.numeric(missing_by_patient$TE))
 ```
 
+To get the interactive visualization, please uncomment the following lines,
+Run All (not Knit).
+Please share a screenshot of the result if possible!
+You may have to install the tm package with `install.packages('tm')`.
 ```{r}
 # x_docs = quanteda::convert(x_dfm, to = 'lda')
 # toLDAvis(mod=stmfit, docs=x_docs$documents)

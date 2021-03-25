@@ -25,6 +25,7 @@ library(lubridate)
 library(stm)
 library(xgboost)
 library(e1071)
+library(yardstick)
 
 theme_set(theme_bw() + 
             theme(legend.title = element_blank(),
@@ -94,11 +95,23 @@ outcome <- "TE"
 ## Supervised learning
 ```{r}
 # install.packages("xgboost")
+
+metrics <- yardstick::metric_set(
+  yardstick::accuracy,
+  yardstick::bal_accuracy,
+  yardstick::kap,
+  yardstick::roc_auc,
+  yardstick::pr_auc
+)
+
 set.seed(1)
 upper_days <- c(0:3, seq(6, 25, 3))
 err_xgbs <- vector('numeric')
 err_svms <- vector('numeric')
+all_evals <- list()
+i <- 0
 for (upper_day in upper_days) {
+  i <- i + 1
   missing_by_patient <- patient_obs_wide %>%
     filter(days_since_admission <= upper_day, # 10-day window
            days_since_admission >= 0) %>%
@@ -107,7 +120,7 @@ for (upper_day in upper_days) {
       sum(!is.na(x)))) %>%
     left_join(demo_df, by = 'patient_num')
   
-  summary(missing_by_patient)
+  # summary(missing_by_patient)
   
   uniq_vals <-
     apply(missing_by_patient, 2, function(x)
@@ -135,44 +148,50 @@ for (upper_day in upper_days) {
     objective = "binary:logistic",
     verbose = 2
   )
+  pred_prob <- predict(bstDense, x_test)
   
-  pred <- as.numeric(predict(bstDense, x_test) > 0.5)
-  err_xgb <- mean(as.numeric(pred > 0.5) != y_test)
+  # svmfit = svm(
+  #   x = x_train,
+  #   y = y_train,
+  #   type = 'C',
+  #   kernel = "linear",
+  #   cost = 10,
+  #   scale = FALSE,
+  #   probability = TRUE
+  # )
+  # 
+  # y_pred <- predict(svmfit, x_test, probability = TRUE)
+  # pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
   
-  # mean(y_test)
-  # importance_matrix <- xgb.importance(model = bstDense)
-  # print(importance_matrix)
-  
-  # dat = data.frame(x = x_train, y = y_train)
-  svmfit = svm(
-    x = x_train,
-    y = y_train,
-    type = 'C',
-    kernel = "linear",
-    cost = 10,
-    scale = FALSE
-  )
-  # print(svmfit)
-  # svmfit$call
-  
-  y_pred <- predict(svmfit, x_test)
-  err_svm <- mean(y_pred != y_test)
-  err_xgbs <- c(err_xgbs, err_xgb)
-  err_svms <- c(err_svms, err_svm)
+  pred <- as.factor(pred_prob > 0.5)
+  levels(pred) <- c('FALSE', 'TRUE')
+  all_evals[[i]] <- metrics(
+    data.frame(y_test = as.factor(y_test), pred_prob, pred),
+    truth = y_test,
+    estimate = pred,
+    pred_prob) 
+  # err_svm <- mean(y_pred != y_test)
+  # err_xgbs <- c(err_xgbs, err_xgb)
+  # err_svms <- c(err_svms, err_svm)
 }
 # print(paste("test-error=", err_xgb))
 # print(paste("test-error=", err_svm))
 # beepr::beep()
-errors_df <- data.frame(
-  upper_day = upper_days,
-  err_xgb = err_xgbs,
-  err_svms = err_svms
-)
+# errors_df <- data.frame(
+#   upper_day = upper_days,
+#   err_xgb = err_xgbs,
+#   err_svms = err_svms
+# )
 # plot(svmfit, y ~ ., dat)
 
-errors_df %>% 
-  pivot_longer(- upper_day) %>% 
-  ggplot(aes(x = upper_day, y = value, color = name)) +
+all_evals %>%
+  bind_rows(.id = 'id') %>% 
+  mutate(upper_day = rep(upper_days, each = length(attr(metrics, 'metrics')))) %>% 
+  filter(.metric == 'bal_accuracy') %>% 
+  # select(upper_day, .estimate) %>% 
+  # pivot_longer(- upper_day) %>%
+  # ggplot(aes(x = upper_day, y = value, color = name)) +
+  ggplot(aes(x = upper_day, y = .estimate)) +
   geom_line() +
   geom_point()
 ```
@@ -265,7 +284,7 @@ beta_mat <- exp(stmfit$beta$logbeta[[1]])
 colnames(beta_mat) <- stmfit$vocab
 rownames(beta_mat) <- paste('Topic', 1:4)
 heatmap(t(beta_mat), Rowv = NA, Colv = NA)
-save(beta_mat, file = 'results/beta_matrix.Rdata')
+save(all_evals, beta_mat, file = 'results/beta_matrix.Rdata')
 ```
 
 ```{r}

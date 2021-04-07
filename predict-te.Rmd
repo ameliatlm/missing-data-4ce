@@ -92,11 +92,15 @@ period_prev <- patient_obs_raw %>%
   ) %>%
   left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
   group_by(patient_num) %>%
-  summarise(thrombo_date = min(calendar_date), .groups = "drop")
+  summarise(thrombo_date = min(calendar_date), .groups = "drop") %>% 
+  mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
+         week_name = ymd("2020-01-01") + weeks(week)) %>%
+  add_count(week)
 
 period_prev %>%
-  ggplot(aes(x = thrombo_date)) +
-  geom_bar()
+  ggplot(aes(x = week_name, y = n)) +
+  geom_col() +
+  labs(x = NULL)
 # take first day of having a thrombotic code
 
 # patient_ddimer <- patient_obs %>%
@@ -196,7 +200,7 @@ for (upper_day in upper_days) {
     nrounds = 20,
     objective = "binary:logistic",
     verbose = 0,
-    eval_metric = 'logloss'
+    eval_metric = "logloss"
   )
   pred_prob <- predict(bstDense, x_test)
 
@@ -298,7 +302,6 @@ lab_names <-
   intersect(lab_bounds$short_name, names(missing_by_patient))
 
 x_mat <- missing_by_patient[, lab_names]
-
 ```
 
 

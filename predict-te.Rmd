@@ -40,15 +40,17 @@ and convert to wide format
 ```{R message=FALSE}
 
 # 4CE long format Labs Data
+
 patient_obs_raw <- read_csv(file.path(my_dir, "LocalPatientObservations.csv"),
   col_types = list(patient_num = readr::col_character())
 )
 
 patient_obs <- patient_obs_raw %>%
-  filter(
-    concept_type == "LAB-LOINC",
-    !concept_code %in% c("2019-8", "2703-7")
-  )
+  # filter(
+  #   concept_type == "LAB-LOINC",
+  #   !concept_code %in% c("2019-8", "2703-7")
+  # ) %>% 
+  {.}
 
 # Code, Descriptions and Ranges
 lab_mapping <- read_csv("public-data/loinc-map.csv")
@@ -92,20 +94,62 @@ period_prev <- patient_obs_raw %>%
   ) %>%
   left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
   group_by(patient_num) %>%
+  # take first day of having a thrombotic code
   summarise(thrombo_date = min(calendar_date), .groups = "drop") %>% 
   mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
-         week_name = ymd("2020-01-01") + weeks(week)) %>%
-  add_count(week)
+         week_name = ymd("2020-01-01") + weeks(week)) 
 
-period_prev %>%
-  ggplot(aes(x = week_name, y = n)) +
-  geom_col() +
-  labs(x = NULL)
-# take first day of having a thrombotic code
 
 # patient_ddimer <- patient_obs %>%
 #   left_join(lab_bounds, by = c('concept_code' = 'LOINC')) %>%
 #   select(- concept_code)
+```
+
+Right censored
+```{r}
+during_hosp <- patient_obs_raw %>%
+  filter(
+    concept_type == "DIAG-ICD10",
+    concept_code %in% thrombo_codes,
+    days_since_admission >= 0
+  ) %>% 
+  left_join(
+    demo_raw %>% 
+      transmute(patient_num, los = last_discharge_date - admission_date),
+    by = 'patient_num') %>% 
+  mutate(during = if_else(days_since_admission <= los, 
+                          'TE during hospitalization', 
+                          'TE after hospitalization')) %>%
+  left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
+  group_by(patient_num, during) %>%
+  summarise(thrombo_date = min(calendar_date), 
+            .groups = "drop") %>% 
+  mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
+         week_name = ymd("2020-01-01") + weeks(week)) 
+
+```
+
+```{r}
+in_hospital_pop <- clin_raw %>% 
+  filter(in_hospital == 1) %>% 
+  group_by(patient_num) %>%
+  summarise(calendar_date = min(calendar_date), .groups = "drop") %>% 
+  mutate(week = week(calendar_date) + ((year(calendar_date) - 2020) * 52)) %>% 
+  # group_by(week) %>% 
+  # distinct(patient_num, .keep_all = TRUE) %>% 
+  # ungroup() %>% 
+  mutate(week_name = ymd("2020-01-01") + weeks(week))
+
+in_hospital_pop %>% 
+  count(week_name) %>%
+  mutate(during = 'All admitted patients') %>% 
+  bind_rows(during_hosp %>% count(week_name, during)) %>% 
+  ggplot(aes(x = week_name, y = n, fill = during)) +
+  geom_col(position = 'stack') +
+  rcartocolor::scale_fill_carto_d() +
+  labs(x = NULL, 
+       title = 'First diagnoses of thrombotic events vs. admissions per week') +
+  theme(legend.position = c(0.45, 0.8))
 ```
 
 
@@ -178,7 +222,10 @@ for (upper_day in upper_days) {
     apply(missing_by_patient, 2, function(x) {
       length(unique(x))
     })
-  missing_by_patient <- missing_by_patient[, uniq_vals > 1]
+  missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>% 
+    # mutate(outcome = as.factor(outcome)) %>% 
+    {.}
+  
   lab_names <-
     intersect(lab_bounds$short_name, names(missing_by_patient))
 
@@ -220,7 +267,7 @@ for (upper_day in upper_days) {
   pred <- as.factor(pred_prob > 0.5)
   levels(pred) <- c("FALSE", "TRUE")
   all_evals[[i]] <- metrics(
-    data.frame(y_test = as.factor(y_test), pred_prob, pred),
+    data.frame(y_test = y_test, pred_prob, pred),
     truth = y_test,
     estimate = pred,
     pred_prob
@@ -238,7 +285,10 @@ for (upper_day in upper_days) {
 #   err_svms = err_svms
 # )
 # plot(svmfit, y ~ ., dat)
+```
 
+
+```{r warnings=FALSE, message=FALSE}
 all_evals %>%
   bind_rows(.id = "id") %>%
   mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
@@ -297,11 +347,59 @@ uniq_vals <-
   apply(missing_by_patient, 2, function(x) {
     length(unique(x))
   })
-missing_by_patient <- missing_by_patient[, uniq_vals > 1]
+missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>% 
+  # mutate(outcome = as.factor(outcome)) %>% 
+  {.}
 lab_names <-
   intersect(lab_bounds$short_name, names(missing_by_patient))
 
 x_mat <- missing_by_patient[, lab_names]
+```
+
+
+```{r}
+
+n_patients <- nrow(missing_by_patient)
+train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
+x_train <- as.matrix(missing_by_patient[train_idx, lab_names])
+y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
+
+x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
+y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
+
+# bstDense <- xgboost(
+#   data = x_train,
+#   label = y_train,
+#   max_depth = 2,
+#   eta = 0.5,
+#   nthread = 3,
+#   nrounds = 20,
+#   objective = "binary:logistic",
+#   verbose = 0,
+#   eval_metric = "logloss"
+# )
+# pred_prob <- predict(bstDense, x_test)
+svmfit = svm(
+  x = x_train,
+  y = y_train,
+  type = 'C',
+  kernel = "linear",
+  cost = 10,
+  scale = FALSE,
+  probability = TRUE
+)
+
+y_pred <- predict(svmfit, x_test, probability = TRUE)
+pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
+
+pred <- as.factor(pred_prob > 0.5)
+levels(pred) <- c("FALSE", "TRUE")
+all_eval<- metrics(
+  data.frame(y_test = y_test, pred_prob, pred),
+  truth = y_test,
+  estimate = pred,
+  pred_prob
+)
 ```
 
 

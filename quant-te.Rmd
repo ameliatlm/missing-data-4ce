@@ -1,0 +1,116 @@
+---
+title: "Quantify the incidence prevalence of thrombotic events"
+author: Trang Le
+output: html_document
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+data_dir <- "../4ce/Input"
+library(tidyverse)
+library(lubridate)
+
+theme_set(theme_bw() +
+  theme(
+    legend.title = element_blank(),
+    panel.grid.minor = element_blank()
+  ))
+```
+
+## Read in files 
+and convert to wide format
+
+```{R message=FALSE}
+# 4CE long format Labs Data
+patient_obs <- read_csv(file.path(data_dir, "LocalPatientObservations.csv"),
+  col_types = list(patient_num = readr::col_character())
+)
+
+demo_raw <-
+  readr::read_csv(
+    file.path(data_dir, "LocalPatientSummary.csv"),
+    col_types = list(patient_num = readr::col_character()),
+    na = "1900-01-01"
+  ) %>%
+  mutate(across(ends_with("_date") & where(is.character), lubridate::mdy)) %>%
+  mutate(
+    last_discharge_date = if_else(
+      !is.na(death_date) & death_date < last_discharge_date,
+      death_date,
+      last_discharge_date
+    )
+  )
+
+clin_raw <-
+  readr::read_csv(
+    file.path(data_dir, "LocalPatientClinicalCourse.csv"),
+    col_types = list(patient_num = readr::col_character())
+  )
+```
+
+```{r}
+thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase2.1AKIRPackage/ac19716a4586f45c398728fcd821ca9d5baffe45/FourCePhase2.1AKI/data-raw/thromb_icd_code.csv") %>%
+  mutate(truncated_code = substr(icd_code, 1, 3)) %>%
+  pull(truncated_code) %>%
+  unique()
+```
+
+Right censored
+```{r}
+during_hosp <- patient_obs %>%
+  filter(
+    concept_type == "DIAG-ICD10",
+    concept_code %in% thrombo_codes,
+    days_since_admission >= 0
+  ) %>%
+  left_join(
+    demo_raw %>%
+      transmute(patient_num, los = interval(admission_date, last_discharge_date) / days(1)),
+    by = "patient_num"
+  ) %>%
+  mutate(during = case_when(
+    days_since_admission <= los ~ "TE during hospitalization",
+    days_since_admission > los & days_since_admission <= (los + 90) ~ "TE 0-3 months after",
+    days_since_admission > (los + 90) & days_since_admission <= (los + 180) ~ "TE 3-6 months after",
+    days_since_admission > (los + 180) ~ "TE after 6 months",
+    TRUE ~ NA_character_
+  )) %>%
+  left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
+  group_by(patient_num, during) %>%
+  summarise(
+    thrombo_date = min(calendar_date),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
+    week_name = ymd("2020-01-01") + weeks(week)
+  )
+```
+
+```{r}
+in_hospital_pop <- clin_raw %>%
+  filter(in_hospital == 1) %>%
+  group_by(patient_num) %>%
+  summarise(calendar_date = min(calendar_date), .groups = "drop") %>%
+  mutate(week = week(calendar_date) + ((year(calendar_date) - 2020) * 52)) %>%
+  # group_by(week) %>%
+  # distinct(patient_num, .keep_all = TRUE) %>%
+  # ungroup() %>%
+  mutate(week_name = ymd("2020-01-01") + weeks(week))
+
+te_prev <- in_hospital_pop %>%
+  count(week_name) %>%
+  mutate(during = "All admitted patients") %>%
+  bind_rows(during_hosp %>% count(week_name, during)) %>%
+  ggplot(aes(x = week_name, y = n, fill = during)) +
+  geom_col(position = "stack") +
+  rcartocolor::scale_fill_carto_d() +
+  labs(
+    x = NULL,
+    title = "First diagnoses of thrombotic events vs. admissions per week"
+  ) +
+  theme(legend.position = c(0.45, 0.8))
+te_prev
+ggsave('figs/te-prev.png', te_prev)
+```

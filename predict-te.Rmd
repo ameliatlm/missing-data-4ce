@@ -10,22 +10,9 @@ knit: (function(inputFile, encoding) {
 my_dir <- "../4ce/Input"
 # install.packages('stm', 'tidytext', 'furrr')
 
-library(ggplot2)
-library(readr)
-library(dplyr)
-library(tidyr)
-library(forcats)
-library(DT)
-library(tibble)
-library(cowplot)
-# library(ggridges)
+library(tidyverse)
 library(lubridate)
-# library(topicmodels)
-# library(LDAvis)
 library(stm)
-library(xgboost)
-library(e1071)
-library(yardstick)
 
 theme_set(theme_bw() +
   theme(
@@ -41,16 +28,9 @@ and convert to wide format
 
 # 4CE long format Labs Data
 
-patient_obs_raw <- read_csv(file.path(my_dir, "LocalPatientObservations.csv"),
+patient_obs <- read_csv(file.path(my_dir, "LocalPatientObservations.csv"),
   col_types = list(patient_num = readr::col_character())
 )
-
-patient_obs <- patient_obs_raw %>%
-  # filter(
-  #   concept_type == "LAB-LOINC",
-  #   !concept_code %in% c("2019-8", "2703-7")
-  # ) %>% 
-  {.}
 
 # Code, Descriptions and Ranges
 lab_mapping <- read_csv("public-data/loinc-map.csv")
@@ -86,7 +66,7 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
   pull(truncated_code) %>%
   unique()
 
-period_prev <- patient_obs_raw %>%
+period_prev <- patient_obs %>%
   filter(
     concept_type == "DIAG-ICD10",
     concept_code %in% thrombo_codes,
@@ -99,62 +79,14 @@ period_prev <- patient_obs_raw %>%
   mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
          week_name = ymd("2020-01-01") + weeks(week)) 
 
-
 # patient_ddimer <- patient_obs %>%
 #   left_join(lab_bounds, by = c('concept_code' = 'LOINC')) %>%
 #   select(- concept_code)
 ```
 
-Right censored
-```{r}
-during_hosp <- patient_obs_raw %>%
-  filter(
-    concept_type == "DIAG-ICD10",
-    concept_code %in% thrombo_codes,
-    days_since_admission >= 0
-  ) %>% 
-  left_join(
-    demo_raw %>% 
-      transmute(patient_num, los = last_discharge_date - admission_date),
-    by = 'patient_num') %>% 
-  mutate(during = if_else(days_since_admission <= los, 
-                          'TE during hospitalization', 
-                          'TE after hospitalization')) %>%
-  left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
-  group_by(patient_num, during) %>%
-  summarise(thrombo_date = min(calendar_date), 
-            .groups = "drop") %>% 
-  mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
-         week_name = ymd("2020-01-01") + weeks(week)) 
-
-```
 
 ```{r}
-in_hospital_pop <- clin_raw %>% 
-  filter(in_hospital == 1) %>% 
-  group_by(patient_num) %>%
-  summarise(calendar_date = min(calendar_date), .groups = "drop") %>% 
-  mutate(week = week(calendar_date) + ((year(calendar_date) - 2020) * 52)) %>% 
-  # group_by(week) %>% 
-  # distinct(patient_num, .keep_all = TRUE) %>% 
-  # ungroup() %>% 
-  mutate(week_name = ymd("2020-01-01") + weeks(week))
-
-in_hospital_pop %>% 
-  count(week_name) %>%
-  mutate(during = 'All admitted patients') %>% 
-  bind_rows(during_hosp %>% count(week_name, during)) %>% 
-  ggplot(aes(x = week_name, y = n, fill = during)) +
-  geom_col(position = 'stack') +
-  rcartocolor::scale_fill_carto_d() +
-  labs(x = NULL, 
-       title = 'First diagnoses of thrombotic events vs. admissions per week') +
-  theme(legend.position = c(0.45, 0.8))
-```
-
-
-```{r}
-thrombo_patients <- patient_obs_raw %>%
+thrombo_patients <- patient_obs %>%
   filter(
     concept_type == "DIAG-ICD10",
     concept_code %in% thrombo_codes,
@@ -180,151 +112,10 @@ patient_obs_wide <- patient_obs %>%
     values_fn = mean
   )
 outcome <- "TE"
-outcome <- "deceased"
+# outcome <- "deceased"
 ```
 
-## Supervised learning
-```{r warnings=FALSE, message=FALSE}
-# install.packages("xgboost")
-
-metrics <- yardstick::metric_set(
-  yardstick::accuracy,
-  yardstick::bal_accuracy,
-  yardstick::kap,
-  yardstick::roc_auc,
-  yardstick::pr_auc
-)
-
-set.seed(1)
-# upper_days <- c(0:3, seq(6, 25, 3))
-upper_days <- 0:35
-# upper_days <- 1
-err_xgbs <- vector("numeric")
-err_svms <- vector("numeric")
-all_evals <- list()
-i <- 0
-for (upper_day in upper_days) {
-  i <- i + 1
-  missing_by_patient <- patient_obs_wide %>%
-    filter(
-      days_since_admission <= upper_day, # 10-day window
-      days_since_admission >= 0
-    ) %>%
-    group_by(patient_num) %>%
-    summarise(across(-days_since_admission, function(x) {
-      sum(!is.na(x))
-    })) %>%
-    left_join(demo_df, by = "patient_num")
-
-  # summary(missing_by_patient)
-
-  uniq_vals <-
-    apply(missing_by_patient, 2, function(x) {
-      length(unique(x))
-    })
-  missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>% 
-    # mutate(outcome = as.factor(outcome)) %>% 
-    {.}
-  
-  lab_names <-
-    intersect(lab_bounds$short_name, names(missing_by_patient))
-
-  x_mat <- missing_by_patient[, lab_names]
-  n_patients <- nrow(missing_by_patient)
-  train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
-  x_train <- as.matrix(missing_by_patient[train_idx, lab_names])
-  y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
-
-  x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
-  y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
-
-  bstDense <- xgboost(
-    data = x_train,
-    label = y_train,
-    max_depth = 2,
-    eta = 0.5,
-    nthread = 3,
-    nrounds = 20,
-    objective = "binary:logistic",
-    verbose = 0,
-    eval_metric = "logloss"
-  )
-  pred_prob <- predict(bstDense, x_test)
-
-  # svmfit = svm(
-  #   x = x_train,
-  #   y = y_train,
-  #   type = 'C',
-  #   kernel = "linear",
-  #   cost = 10,
-  #   scale = FALSE,
-  #   probability = TRUE
-  # )
-  #
-  # y_pred <- predict(svmfit, x_test, probability = TRUE)
-  # pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
-
-  pred <- as.factor(pred_prob > 0.5)
-  levels(pred) <- c("FALSE", "TRUE")
-  all_evals[[i]] <- metrics(
-    data.frame(y_test = y_test, pred_prob, pred),
-    truth = y_test,
-    estimate = pred,
-    pred_prob
-  )
-  # err_svm <- mean(y_pred != y_test)
-  # err_xgbs <- c(err_xgbs, err_xgb)
-  # err_svms <- c(err_svms, err_svm)
-}
-# print(paste("test-error=", err_xgb))
-# print(paste("test-error=", err_svm))
-# beepr::beep()
-# errors_df <- data.frame(
-#   upper_day = upper_days,
-#   err_xgb = err_xgbs,
-#   err_svms = err_svms
-# )
-# plot(svmfit, y ~ ., dat)
-```
-
-
-```{r warnings=FALSE, message=FALSE}
-all_evals %>%
-  bind_rows(.id = "id") %>%
-  mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
-  filter(.metric == "bal_accuracy") %>%
-  ggplot(aes(x = upper_day, y = .estimate)) +
-  labs(y = "bal_accuracy") +
-  geom_line() +
-  geom_point()
-
-all_evals %>%
-  bind_rows(.id = "id") %>%
-  mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
-  filter(.metric == "pr_auc") %>%
-  # select(upper_day, .estimate) %>%
-  # pivot_longer(- upper_day) %>%
-  # ggplot(aes(x = upper_day, y = value, color = name)) +
-  ggplot(aes(x = upper_day, y = .estimate)) +
-  # scale_y_continuous(limits = c(0, 1)) +
-  labs(y = "pr_auc") +
-  geom_line() +
-  geom_point()
-
-all_evals %>%
-  bind_rows(.id = "id") %>%
-  mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
-  filter(.metric == "roc_auc") %>%
-  # select(upper_day, .estimate) %>%
-  # pivot_longer(- upper_day) %>%
-  # ggplot(aes(x = upper_day, y = value, color = name)) +
-  ggplot(aes(x = upper_day, y = .estimate)) +
-  labs(y = "roc_auc") +
-  # scale_y_continuous(limits = c(0, 1)) +
-  geom_line() +
-  geom_point()
-```
-
+## Unsupervised learning: LDA
 
 ```{r}
 upper_day <- 9
@@ -356,60 +147,30 @@ lab_names <-
 x_mat <- missing_by_patient[, lab_names]
 ```
 
-
-```{r}
-
-n_patients <- nrow(missing_by_patient)
-train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
-x_train <- as.matrix(missing_by_patient[train_idx, lab_names])
-y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
-
-x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
-y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
-
-# bstDense <- xgboost(
-#   data = x_train,
-#   label = y_train,
-#   max_depth = 2,
-#   eta = 0.5,
-#   nthread = 3,
-#   nrounds = 20,
-#   objective = "binary:logistic",
-#   verbose = 0,
-#   eval_metric = "logloss"
-# )
-# pred_prob <- predict(bstDense, x_test)
-svmfit = svm(
-  x = x_train,
-  y = y_train,
-  type = 'C',
-  kernel = "linear",
-  cost = 10,
-  scale = FALSE,
-  probability = TRUE
-)
-
-y_pred <- predict(svmfit, x_test, probability = TRUE)
-pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
-
-pred <- as.factor(pred_prob > 0.5)
-levels(pred) <- c("FALSE", "TRUE")
-all_eval<- metrics(
-  data.frame(y_test = y_test, pred_prob, pred),
-  truth = y_test,
-  estimate = pred,
-  pred_prob
-)
-```
-
-
-## Unsupervised learning: LDA
 ```{r}
 # set.seed(1)
 # m <- topicmodels::LDA(x_mat, method = "Gibbs", k = 8,  control = list(alpha = 0.1))
 ```
 
 ```{r cache=TRUE}
+exclusivity <- function(mod.out, M = 10, frexw = .7) {
+  w <- frexw
+  if (length(mod.out$beta$logbeta) != 1) stop("Exclusivity calculation only designed for models without content covariates")
+  tbeta <- t(exp(mod.out$beta$logbeta[[1]]))
+  s <- rowSums(tbeta)
+  mat <- tbeta / s # normed by columns of beta now.
+
+  ex <- apply(mat, 2, rank) / nrow(mat)
+  fr <- apply(tbeta, 2, rank) / nrow(mat)
+  frex <- 1 / (w / ex + (1 - w) / fr)
+  index <- apply(tbeta, 2, order, decreasing = TRUE)[1:M, ]
+  out <- vector(length = ncol(tbeta))
+  for (i in 1:ncol(frex)) {
+    out[i] <- sum(frex[index[, i], i])
+  }
+  out
+}
+
 x_dfm <- x_mat %>%
   rownames_to_column("id") %>%
   pivot_longer(-id, names_to = "lab", values_to = "n") %>%
@@ -465,8 +226,6 @@ We want to: maximize likelihood, lower bound, semantic coherence and minimize re
 - https://scholar.harvard.edu/files/dtingley/files/multimod.pdf
 - http://proceedings.mlr.press/v22/taddy12/taddy12.pdf
 
-
-
 ```{r}
 K <- 5
 stmfit <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE)
@@ -475,23 +234,7 @@ stmfit <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE
 
 ```{r}
 # labelTopics(stmfit)
-exclusivity <- function(mod.out, M = 10, frexw = .7) {
-  w <- frexw
-  if (length(mod.out$beta$logbeta) != 1) stop("Exclusivity calculation only designed for models without content covariates")
-  tbeta <- t(exp(mod.out$beta$logbeta[[1]]))
-  s <- rowSums(tbeta)
-  mat <- tbeta / s # normed by columns of beta now.
 
-  ex <- apply(mat, 2, rank) / nrow(mat)
-  fr <- apply(tbeta, 2, rank) / nrow(mat)
-  frex <- 1 / (w / ex + (1 - w) / fr)
-  index <- apply(tbeta, 2, order, decreasing = TRUE)[1:M, ]
-  out <- vector(length = ncol(tbeta))
-  for (i in 1:ncol(frex)) {
-    out[i] <- sum(frex[index[, i], i])
-  }
-  out
-}
 topicQuality(stmfit, documents = x_dfm)
 ```
 
@@ -515,4 +258,201 @@ You may have to install the tm package with `install.packages('tm')`.
 ```{r}
 # x_docs = quanteda::convert(x_dfm, to = 'lda')
 # toLDAvis(mod=stmfit, docs=x_docs$documents)
+```
+
+
+## Supervised learning
+```{r warnings=FALSE, message=FALSE}
+# install.packages("xgboost")
+
+# metrics <- yardstick::metric_set(
+#   yardstick::accuracy,
+#   yardstick::bal_accuracy,
+#   yardstick::kap,
+#   yardstick::roc_auc,
+#   yardstick::pr_auc
+# )
+# 
+# set.seed(1)
+# # upper_days <- c(0:3, seq(6, 25, 3))
+# upper_days <- 0:35
+# # upper_days <- 1
+# err_xgbs <- vector("numeric")
+# err_svms <- vector("numeric")
+# all_evals <- list()
+# i <- 0
+# # upper_day = 10
+# for (upper_day in upper_days) {
+#   i <- i + 1
+#   missing_by_patient <- patient_obs_wide %>%
+#     filter(
+#       days_since_admission <= upper_day, # 10-day window
+#       days_since_admission >= 0
+#     ) %>%
+#     group_by(patient_num) %>%
+#     summarise(across(-days_since_admission, function(x) {
+#       sum(!is.na(x))
+#     })) %>%
+#     left_join(demo_df, by = "patient_num")
+# 
+#   # summary(missing_by_patient)
+# 
+#   uniq_vals <-
+#     apply(missing_by_patient, 2, function(x) {
+#       length(unique(x))
+#     })
+#   missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>% 
+#     # mutate(outcome = as.factor(outcome)) %>% 
+#     {.}
+#   
+#   lab_names <-
+#     intersect(lab_bounds$short_name, names(missing_by_patient))
+# 
+#   x_mat <- missing_by_patient[, lab_names]
+#   n_patients <- nrow(missing_by_patient)
+#   train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
+#   x_train <- as.matrix(missing_by_patient[train_idx, lab_names])
+#   y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
+# 
+#   x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
+#   y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
+# 
+#   table(y_test)
+#   table(y_train)
+#   
+#   bstDense <- xgboost(
+#     data = x_train,
+#     label = y_train,
+#     max_depth = 2,
+#     eta = 0.5,
+#     nthread = 3,
+#     nrounds = 20,
+#     objective = "binary:logistic",
+#     verbose = 0,
+#     eval_metric = "aucpr"
+#   )
+#   pred_prob <- predict(bstDense, x_test)
+# 
+#   svmfit = svm(
+#     x = x_train,
+#     y = y_train,
+#     type = 'C',
+#     kernel = "radial",
+#     cost = 10,
+#     scale = FALSE,
+#     probability = TRUE
+#   )
+# 
+#   y_pred <- predict(svmfit, x_test, probability = TRUE)
+#   pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
+# hist(pred_prob)
+# 
+#   pred <- as.factor(pred_prob > 0.5)
+#   mean(pred == y_test)
+#   
+#   levels(pred) <- c("FALSE", "TRUE")
+#   all_evals[[i]] <- metrics(
+#     data.frame(y_test = y_test, pred_prob, pred),
+#     truth = y_test,
+#     estimate = pred,
+#     pred_prob
+#   )
+#   # err_svm <- mean(y_pred != y_test)
+#   # err_xgbs <- c(err_xgbs, err_xgb)
+#   # err_svms <- c(err_svms, err_svm)
+# }
+# print(paste("test-error=", err_xgb))
+# print(paste("test-error=", err_svm))
+# beepr::beep()
+# errors_df <- data.frame(
+#   upper_day = upper_days,
+#   err_xgb = err_xgbs,
+#   err_svms = err_svms
+# )
+# plot(svmfit, y ~ ., dat)
+```
+
+
+```{r warnings=FALSE, message=FALSE}
+# all_evals %>%
+#   bind_rows(.id = "id") %>%
+#   mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
+#   filter(.metric == "bal_accuracy") %>%
+#   ggplot(aes(x = upper_day, y = .estimate)) +
+#   labs(y = "bal_accuracy") +
+#   geom_line() +
+#   geom_point()
+# 
+# all_evals %>%
+#   bind_rows(.id = "id") %>%
+#   mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
+#   filter(.metric == "pr_auc") %>%
+#   # select(upper_day, .estimate) %>%
+#   # pivot_longer(- upper_day) %>%
+#   # ggplot(aes(x = upper_day, y = value, color = name)) +
+#   ggplot(aes(x = upper_day, y = .estimate)) +
+#   # scale_y_continuous(limits = c(0, 1)) +
+#   labs(y = "pr_auc") +
+#   geom_line() +
+#   geom_point()
+# 
+# all_evals %>%
+#   bind_rows(.id = "id") %>%
+#   mutate(upper_day = rep(upper_days, each = length(attr(metrics, "metrics")))) %>%
+#   filter(.metric == "roc_auc") %>%
+#   # select(upper_day, .estimate) %>%
+#   # pivot_longer(- upper_day) %>%
+#   # ggplot(aes(x = upper_day, y = value, color = name)) +
+#   ggplot(aes(x = upper_day, y = .estimate)) +
+#   labs(y = "roc_auc") +
+#   # scale_y_continuous(limits = c(0, 1)) +
+#   geom_line() +
+#   geom_point()
+```
+
+
+
+```{r why-is-auc-so-low, include=FALSE, eval=FALSE}
+# n_patients <- nrow(missing_by_patient)
+# train_idx <- sample.int(n_patients, floor(n_patients * 0.8))
+# x_train <- as.matrix(missing_by_patient[train_idx, lab_names])
+# y_train <- missing_by_patient[train_idx, outcome, drop = TRUE]
+# 
+# x_test <- as.matrix(missing_by_patient[-train_idx, lab_names])
+# y_test <- missing_by_patient[-train_idx, outcome, drop = TRUE]
+
+# bstDense <- xgboost(
+#   data = x_train,
+#   label = y_train,
+#   max_depth = 2,
+#   eta = 0.5,
+#   nthread = 3,
+#   nrounds = 20,
+#   objective = "binary:logistic",
+#   verbose = 0,
+#   eval_metric = "logloss"
+# )
+
+# pred_prob <- predict(bstDense, x_test)
+# svmfit = svm(
+#   x = x_train,
+#   y = y_train,
+#   type = 'C',
+#   kernel = "linear",
+#   cost = 10,
+#   scale = FALSE,
+#   probability = TRUE
+# )
+
+# y_pred <- predict(svmfit, x_test, probability = TRUE)
+# pred_prob <- attr(y_pred, 'probabilities')[, 'TRUE']
+# 
+# pred <- as.factor(pred_prob > 0.5)
+# levels(pred) <- c("FALSE", "TRUE")
+# all_eval<- metrics(
+#   data.frame(y_test = y_test, pred_prob, pred),
+#   truth = y_test,
+#   estimate = pred,
+#   pred_prob
+# )
 ```

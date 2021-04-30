@@ -5,3 +5,6 @@
 .DS_Store
 data/.DS_Store
 penn-data/
+figs/
+htmls/
+results/

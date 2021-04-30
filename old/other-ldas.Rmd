@@ -1,0 +1,138 @@
+---
+title: "other lda stuff"
+output: html_document
+---
+
+
+```{r}
+dtm <- CreateDtm(doc_vec = nih_sample$ABSTRACT_TEXT, # character vector of documents
+                 doc_names = nih_sample$APPLICATION_ID, # document names
+                 ngram_window = c(1, 2), # minimum and maximum n-gram length
+                 stopword_vec = c(stopwords::stopwords("en"), # stopwords from tm
+                                  stopwords::stopwords(source = "smart")), # this is the default value
+                 lower = TRUE, # lowercase - this is the default value
+                 remove_punctuation = TRUE, # punctuation - this is the default
+                 remove_numbers = TRUE, # numbers - this is the default
+                 verbose = FALSE, # Turn off status bar for this demo
+                 cpus = 2) # default is all available cpus on the system
+
+dtm <- dtm[,colSums(dtm) > 2]
+
+class(dtm) <- 'data.frame'
+model <- FitLdaModel(dtm = as.matrix(dtm), 
+                     k = 20,
+                     iterations = 200, # I usually recommend at least 500 iterations or more
+                     burnin = 180,
+                     alpha = 0.1,
+                     beta = 0.05,
+                     optimize_alpha = TRUE,
+                     calc_likelihood = TRUE,
+                     calc_coherence = TRUE,
+                     calc_r2 = TRUE,
+                     cpus = 2) 
+```
+
+```{r}
+k_list <- seq(1, 20, by = 1)
+# model_dir <- paste0("models_", digest::digest(vocabulary, algo = "sha1"))
+# if (!dir.exists(model_dir)) dir.create(model_dir)
+
+model_list <- TmParallelApply(X = k_list, FUN = function(k){
+  # filename = file.path(model_dir, paste0(k, "_topics.rda"))
+  
+  # if (!file.exists(filename)) {
+    m <- FitLdaModel(dtm = as.matrix(dtm), k = k, iterations = 500)
+    m$k <- k
+    m$coherence <- CalcProbCoherence(phi = m$phi, dtm = dtm, M = 5)
+    # save(m, file = filename)
+  # } else {
+  #   load(filename)
+  # }
+  
+  m
+}) # export only needed for Windows machines
+
+
+coherence_mat <- data.frame(k = sapply(model_list, function(x) nrow(x$phi)), 
+                            coherence = sapply(model_list, function(x) mean(x$coherence)), 
+                            stringsAsFactors = FALSE)
+ggplot(coherence_mat, aes(x = k, y = coherence)) +
+  geom_point() +
+  geom_line(group = 1)+
+  ggtitle("Best Topic by Coherence Score") + theme_minimal() +
+  scale_x_continuous(breaks = seq(1,20,1)) + ylab("Coherence")
+```
+
+## Unsupervised learning: LDA
+```{r}
+set.seed(1)
+m <- LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
+```
+
+```{r}
+library(ldatuning)
+library(textmineR)
+```
+
+## LDA visualization
+```{r}
+# m = LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
+dtm <- x_mat[slam::row_sums(x_mat) > 0, ]
+phi <- as.matrix(posterior(m)$terms)
+theta <- as.matrix(posterior(m)$topics)
+vocab <- colnames(phi)
+doc.length = slam::row_sums(dtm)
+term.freq = slam::col_sums(dtm)[match(vocab, colnames(dtm))]
+json = createJSON(phi = phi, theta = theta, vocab = vocab,
+     doc.length = doc.length, term.frequency = term.freq)
+serVis(json)
+```
+
+```{r}
+terms(m, 5)
+topic = 1
+words = posterior(m)$terms[topic, ]
+topwords = head(sort(words, decreasing = T), n=50)
+head(topwords)
+head(posterior(m)$topics)
+topic_mat <- posterior(m)$topics
+cor.test(topic_mat[,1], as.numeric(missing_by_patient$TE))
+cor.test(topic_mat[,2], as.numeric(missing_by_patient$TE))
+cor.test(topic_mat[,3], as.numeric(missing_by_patient$TE))
+cor.test(topic_mat[,4], as.numeric(missing_by_patient$TE))
+cor.test(topic_mat[,5], as.numeric(missing_by_patient$TE))
+topic.docs = topic_mat[, topic] 
+topic.docs = sort(topic.docs, decreasing=T)
+head(topic.docs)
+topdoc = names(topic.docs)[1]
+# topdoc_corp = corp[docnames(corp) == topdoc]
+# texts(topdoc_corp)
+# docs = docvars(x_mat)[match(rownames(x_mat), docnames(x_mat)),]
+# tpp = aggregate(posterior(m)$topics, by=docs["President"], mean)
+# rownames(tpp) = tpp$President
+# heatmap(as.matrix(tpp[-1]))
+```
+
+
+
+```{r}
+library("tsne")
+svd_tsne <- function(x) tsne(svd(x)$u)
+
+stmfit <- stm(x_dfm, K = 4, verbose = FALSE, init.type = "Spectral", seed = 1)
+
+# m = LDA(x_mat, method = "Gibbs", k = 5,  control = list(alpha = 0.1))
+dtm <- x_mat[slam::row_sums(x_mat) > 0, ]
+# phi <- as.matrix(posterior(m)$terms)
+phi <- exp(m$beta$logbeta[[1]])
+theta <- m$theta
+vocab <- m$vocab
+doc.length = slam::row_sums(dtm)
+term.freq = slam::col_sums(dtm)[match(vocab, colnames(dtm))]
+
+json = createJSON(phi = phi, theta = theta, vocab = vocab,
+                  mds.method = svd_tsne,
+                  doc.length = doc.length, term.frequency = term.freq)
+serVis(json)
+# toLDAvis(mod=m, docs=dtm)
+```

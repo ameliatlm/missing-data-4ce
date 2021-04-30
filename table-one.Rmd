@@ -1,0 +1,373 @@
+---
+title: "Table 1"
+author: Trang Le
+output: html_document
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+data_dir <- "../4ce/Input"
+# install.packages('stm', 'tidytext', 'furrr')
+
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(forcats)
+# library(DT)
+# library(tibble)
+# library(cowplot)
+# library(ggridges)
+library(lubridate)
+library(stringr)
+# library(topicmodels)
+# library(LDAvis)
+# library(stm)
+# library(xgboost)
+# library(e1071)
+# library(yardstick)
+
+for (r_file in list.files('R', full.names = TRUE, pattern = '.R$')) source(r_file)
+
+theme_set(theme_bw() +
+  theme(
+    legend.title = element_blank(),
+    panel.grid.minor = element_blank()
+  ))
+```
+
+## Read in files 
+and convert to wide format
+
+```{R message=FALSE}
+
+# 4CE long format Labs Data
+obs_raw <-
+      readr::read_csv(
+        file.path(data_dir, "LocalPatientObservations.csv"),
+        col_types = list(patient_num = readr::col_character())
+      )
+
+# patient_obs <- patient_obs_raw %>%
+#   filter(
+#     concept_type == "LAB-LOINC",
+#     !concept_code %in% c("2019-8", "2703-7")
+#   )
+
+# Code, Descriptions and Ranges
+lab_mapping <- read_csv("public-data/loinc-map.csv")
+lab_bounds <- read_csv("public-data/lab_bounds.csv")
+lab_names <- lab_bounds$short_name
+
+demo_raw <-
+  readr::read_csv(
+    file.path(data_dir, "LocalPatientSummary.csv"),
+    col_types = list(patient_num = readr::col_character()),
+    na = "1900-01-01"
+  ) 
+
+clin_raw <-
+  readr::read_csv(
+    file.path(data_dir, "LocalPatientClinicalCourse.csv"),
+    col_types = list(patient_num = readr::col_character())
+  )
+```
+
+```{r}
+thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase2.1AKIRPackage/ac19716a4586f45c398728fcd821ca9d5baffe45/FourCePhase2.1AKI/data-raw/thromb_icd_code.csv") %>%
+  mutate(truncated_code = substr(icd_code, 1, 3)) %>%
+  pull(truncated_code) %>%
+  unique()
+
+thrombo_patient <- obs_raw %>% 
+  filter(concept_code %in% thrombo_codes,
+    days_since_admission >= 0)
+
+thrombo_patient %>% 
+  count(patient_num) %>% 
+  pull(n) %>%
+  hist(breaks = 36)
+  
+thrombo_patient_vec <- unique(thrombo_patient$patient_num)
+
+```
+
+`r n_distinct(thrombo_patient$patient_num)` patients with at least one thrombo code.
+
+```{r}
+# icd_tables <- get_tables(
+#   c('no_neuro_cond', 'neuro_cond'),
+#   nstay_df,
+#   right_join0(index_scores_elix, nstay_df, by = 'patient_num'),
+#   comorb_names_elix,
+#   blur_abs,
+#   mask_thres,
+#   'concept_code'
+# )[-3]
+```
+
+```{r}
+#####
+# start analysis
+comp_readmissions <- clin_raw %>%
+  group_by(patient_num) %>%
+  arrange(days_since_admission) %>%
+  mutate(delta_hospitalized = diff(c(in_hospital[1], in_hospital))) %>%
+  mutate(
+    first_out =
+      (
+        delta_hospitalized == -1 & !duplicated(delta_hospitalized == -1)
+      ),
+    first_change =
+      first_out |
+      (delta_hospitalized == 1 &
+         !duplicated(delta_hospitalized == 1))
+  ) %>%
+  ungroup()
+
+n_readms <- comp_readmissions %>%
+  filter(
+    delta_hospitalized != 0,
+    in_hospital == 1
+  ) %>%
+  add_count(patient_num, name = "n_readmissions") %>%
+  arrange(desc(n_readmissions)) %>%
+  select(patient_num, n_readmissions) %>%
+  distinct()
+
+readmissions <- comp_readmissions %>%
+  filter(patient_num %in% n_readms$patient_num, first_change) %>%
+  select(patient_num, delta_hospitalized, days_since_admission) %>%
+  pivot_wider(
+    names_from = delta_hospitalized,
+    values_from = days_since_admission
+  ) %>%
+  mutate(time_to_first_readmission = `1` - `-1`) %>%
+  select(patient_num, time_to_first_readmission) %>%
+  left_join(n_readms, by = "patient_num")
+
+demo_processed <- demo_raw  %>%
+    mutate(
+      across(
+        ends_with("_date") & tidywhere(is.character),
+        ~ lubridate::parse_date_time(.x, orders = c("mdy", "ymd"))
+      ),
+      last_discharge_date = pmin(death_date, last_discharge_date, na.rm = TRUE),
+      total_stay = lubridate::interval(admission_date, last_discharge_date) %/% lubridate::days(1)
+    ) %>%
+  mutate(
+    time_to_severe = severe_date - admission_date,
+    time_to_severe = ifelse(time_to_severe < 0, NA, time_to_severe),
+    time_to_death = death_date - admission_date,
+    time_to_death = ifelse(time_to_death < 0, NA, time_to_death),
+    readmitted = patient_num %in% readmissions$patient_num,
+    sex = as.factor(sex),
+    race = as.factor(race),
+    age_group = as.factor(age_group),
+    Severity = as.factor(severe) %>%
+      fct_recode(Severe = "1", `Non-severe` = "0"),
+    Survival = as.factor(deceased) %>%
+      fct_recode(Alive = "0", Deceased = "1"),
+    n_stay = total_stay,
+    thrombo = patient_num %in% thrombo_patient_vec
+  ) %>%
+  # left_join(days_count_min_max, by = 'patient_num') %>%
+  left_join(readmissions, by = "patient_num") %>%
+  replace_na(list(n_readmissions = 0))
+```
+
+
+```{r}
+CurrSiteId = "UPENN"
+demo_df <- demo_processed %>%
+  # left_join(distinct(select(neuro_patients, patient_num, neuro_type)),
+  #   by = "patient_num"
+  # ) %>%
+  # replace_na(list(neuro_type = "None")) %>%
+  # mutate() %>% 
+  {.}
+index_scores_elix <- get_elix_mat(obs_first_hosp, icd_version) %>%
+  right_join0(select(demo_raw, patient_num), by = "patient_num")
+# 
+# elix_mat <- cor(select(
+#   index_scores_elix,
+#   -c(patient_num, elixhauser_score)
+# ))
+# 
+# elix_pca <- index_scores_elix %>%
+#   select(-elixhauser_score) %>%
+#   tibble::column_to_rownames("patient_num") %>%
+#   as.matrix()
+
+obfus_tables <- get_tables(
+  # c("no_neuro_cond", "neuro_cond"),
+  demo_df,
+  # scores_unique,
+  # comorb_names_elix,
+  blur_abs = 0,
+  mask_thres = 10,
+  group_var = 'thrombo'
+) %>%
+  lapply(function(x) mutate(x, site = CurrSiteId))
+```
+
+
+
+
+```{r}
+# demo_table_list <- list()
+# for (i in results) {
+#   tmp <- get(i)
+#   demo_table_list[[i]] <- tmp[[c(
+#     "first_hosp_results",
+#     "cpns_results",
+#     "demo_table"
+#   )]] %>%
+#     select(site, everything())
+# }
+
+# demo_table_list <- list(UPENN_results = obfus_tables)
+
+combined_table_wide <- 
+  # bind_rows(demo_table_list) %>%
+  # site level differences in variable names require tolower()
+  obfus_tables$demo_table %>% 
+  mutate(
+    site = toupper(site),
+    variable = tolower(variable),
+    Demo_var = sub("\\..*", "", variable),
+    Demo_var_i = sub(".*\\.", "", variable) %>%
+      gsub("_", " ", .) %>%
+      str_to_title() %>%
+      recode(
+        `00to02` = "0-2",
+        `03to05` = "3-5",
+        `06to11` = "6-11",
+        `12to17` = "12-17",
+        `18to25` = "18-25",
+        `26to49` = "26-49",
+        `50to69` = "50-69",
+        `70to79` = "70-79",
+        `80plus` = "80+",
+        race.white = "White",
+        race.american_indian = "American Indian",
+        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
+        `Hispanic Latino` = "Hispanic/Latino",
+        `False` = "Not Readmitted",
+        `True` = "Readmitted"
+      )
+  )
+```
+
+```{r}
+# other_table_list <- list()
+# for (i in results) {
+#   tmp <- get(i)
+#   other_table_list[[i]] <- tmp[[c(
+#     "first_hosp_results",
+#     "cpns_results",
+#     "other_obfus_table"
+#   )]] %>%
+#     select(site, everything())
+# }
+# 
+# combined_other_table_wide <- bind_rows(other_table_list) %>%
+#   filter(grepl("Mean|Median", name))
+```
+
+## Table One
+
+```{r}
+ordered_vars <- c(
+  "all", "sex", "age_group", "race",
+  "readmitted", "severity", "survival"
+)
+tableOne_inter <- combined_table_wide %>%
+  group_by(variable, Demo_var, Demo_var_i) %>%
+  summarise(across(
+    starts_with("n_var"),
+    function(x) sum(x, na.rm = TRUE)
+  ), .groups = "drop")
+
+row_order <- c(
+  "All Patients", "Female", "Male",
+  "0-2", "3-5", "6-11", "12-17", "18-25",
+  "26-49", "50-69", "70-79", "80+",
+  "American Indian", "Asian", "Black",
+  "Hawaiian/Pacific Islander",
+  "Hispanic/Latino", "Other", "White",
+  "Median Elixhauser score [Min, Max]",
+  "Median length of stay [Min, Max]",
+  "Non-Severe", "Severe",
+  "Median time to severe [Min, Max]",
+  "Alive", "Deceased", "Median time to death [Min, Max]",
+  "Not Readmitted", "Readmitted",
+  "Median time to first readmission [Min, Max]",
+  "Median number of readmissions [Min, Max]"
+)
+
+get_table_n <- function(var) {
+  tableOne_raw %>%
+    filter(`Table 1` == var) %>%
+    pull(N)
+}
+
+tableOne_raw <- tableOne_inter %>%
+  filter(Demo_var == "sex") %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  data.frame(
+    variable = "all",
+    Demo_var = "all",
+    Demo_var_i = "All Patients",
+    .
+  ) %>%
+  bind_rows(tableOne_inter) %>%
+  mutate(
+    N = rowSums(across(where(is.numeric))),
+    Demo_var = factor(Demo_var, levels = ordered_vars)
+  ) %>%
+  group_by(Demo_var) %>%
+  mutate(across(
+    starts_with("n_var"),
+    function(x) {
+      paste0(x, " (", round(x / sum(x, na.rm = TRUE) * 100, 1), "%", ")")
+    }
+  )) %>%
+  ungroup() %>%
+  arrange(Demo_var) %>%
+  select(Demo_var_i, N, starts_with("n_var")) %>%
+  `colnames<-`(gsub(
+    x = names(.),
+    pattern = "n_var_",
+    replacement = ""
+  )) %>%
+  rename("Table 1" = Demo_var_i) 
+
+tableOne_compiled <- tableOne_raw %>%
+  mutate(
+    N = case_when(
+      grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
+      grepl("Median time to severe", `Table 1`) ~ get_table_n("Severe"),
+      grepl("death", `Table 1`) ~ get_table_n("Deceased"),
+      grepl("readmission", `Table 1`) ~ get_table_n("Readmitted"),
+      grepl("Median Elixhauser score", `Table 1`) ~ get_table_n("All Patients"),
+      TRUE ~ N
+    )
+  ) %>% 
+  rename('No thrombotic events' = `FALSE`,
+         'Has thrombotic events' = `TRUE`)
+
+library(kableExtra)
+kbl(tableOne_compiled) %>%
+  kable_paper("striped", full_width = F) %>%
+  pack_rows("Gender", 2, 3) %>%
+  pack_rows("Age", 4, 10) %>%
+  pack_rows("Race & Ethnicity", 11, 17) %>%
+  # pack_rows("Comorbidites", 20, 20) %>%
+  # pack_rows("Hospital Course", 21, 21) %>%
+  pack_rows("Severity", 20, 21) %>%
+  pack_rows("Survival", 22, 23) %>%
+  pack_rows("Readmission", 18, 19) %>%
+  {.}
+```

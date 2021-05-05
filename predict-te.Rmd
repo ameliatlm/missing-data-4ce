@@ -105,6 +105,7 @@ demo_df$TE %>% sum()
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
   select(-concept_code) %>%
+  filter(!is.na(short_name)) %>% 
   pivot_wider(
     id_cols = c(patient_num, days_since_admission),
     names_from = short_name,
@@ -138,11 +139,13 @@ uniq_vals <-
   apply(missing_by_patient, 2, function(x) {
     length(unique(x))
   })
-missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>% 
-  # mutate(outcome = as.factor(outcome)) %>% 
-  {.}
 lab_names <-
   intersect(lab_bounds$short_name, names(missing_by_patient))
+
+missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>%
+  # mutate(outcome = as.factor(outcome)) %>%
+  mutate(sum_labs = rowSums(across(all_of(lab_names)))) %>% 
+  filter(sum_labs > 0)
 
 x_mat <- missing_by_patient[, lab_names]
 ```
@@ -175,7 +178,10 @@ x_dfm <- x_mat %>%
   rownames_to_column("id") %>%
   pivot_longer(-id, names_to = "lab", values_to = "n") %>%
   tidytext::cast_dfm(id, lab, n)
+```
 
+
+```{r cache=TRUE}
 system.time(many_models <- data.frame(K = seq(2, 8, 1)) %>%
   mutate(topic_model = furrr::future_map(K, ~ stm(
     x_dfm,
@@ -219,7 +225,7 @@ k_result %>%
     subtitle = "These diagnostics indicate that a good number of topics is 5"
   )
 #
-beepr::beep()
+
 ```
 
 We want to: maximize likelihood, lower bound, semantic coherence and minimize residuals.
@@ -258,6 +264,10 @@ You may have to install the tm package with `install.packages('tm')`.
 ```{r}
 # x_docs = quanteda::convert(x_dfm, to = 'lda')
 # toLDAvis(mod=stmfit, docs=x_docs$documents)
+```
+
+```{r}
+knitr::knit_exit()
 ```
 
 
@@ -456,3 +466,8 @@ You may have to install the tm package with `install.packages('tm')`.
 #   pred_prob
 # )
 ```
+
+```{r}
+beepr::beep()
+```
+

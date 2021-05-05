@@ -104,6 +104,8 @@ vis_miss(te_labs, sort_miss = TRUE)
 
 ```{r}
 gg_miss_upset(te_labs, nsets = 7, nintersects = 10)
+gg_miss_fct(x = te_labs, fct = te)
+gg_miss_case(te_labs)
 gg_miss_var(te_labs) +
   theme(panel.grid.minor = element_blank(),
         panel.grid.major.y = element_blank()) + 
@@ -116,8 +118,12 @@ gg_miss_var(te_labs, show_pct = TRUE) +
   scale_y_continuous(expand = expansion(0, c(0, 1))) +
   xlab(NULL)
 # mcar_test(te_labs)
-```
 
+# te_labs %>% 
+#   finalfit::missing_pairs(dependent = "te", 
+#                           explanatory = lab_names, 
+#                           position = "fill")
+```
 
 
 ```{R}

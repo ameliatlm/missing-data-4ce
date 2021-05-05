@@ -53,11 +53,11 @@ demo_raw <-
   )
 
 data_dir <- "../4ce/Input/"
-clin_raw <-
-  readr::read_csv(
-    file.path(data_dir, "LocalPatientClinicalCourse.csv"),
-    col_types = list(patient_num = readr::col_character())
-  )
+# clin_raw <-
+#   readr::read_csv(
+#     file.path(data_dir, "LocalPatientClinicalCourse.csv"),
+#     col_types = list(patient_num = readr::col_character())
+#   )
 ```
 
 ```{r}
@@ -66,18 +66,18 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
   pull(truncated_code) %>%
   unique()
 
-period_prev <- patient_obs %>%
-  filter(
-    concept_type == "DIAG-ICD10",
-    concept_code %in% thrombo_codes,
-    days_since_admission >= 0
-  ) %>%
-  left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
-  group_by(patient_num) %>%
-  # take first day of having a thrombotic code
-  summarise(thrombo_date = min(calendar_date), .groups = "drop") %>% 
-  mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
-         week_name = ymd("2020-01-01") + weeks(week)) 
+# period_prev <- patient_obs %>%
+#   filter(
+#     concept_type == "DIAG-ICD10",
+#     concept_code %in% thrombo_codes,
+#     days_since_admission >= 0
+#   ) %>%
+#   left_join(clin_raw, by = c("patient_num", "days_since_admission")) %>%
+#   group_by(patient_num) %>%
+#   # take first day of having a thrombotic code
+#   summarise(thrombo_date = min(calendar_date), .groups = "drop") %>% 
+#   mutate(week = week(thrombo_date) + ((year(thrombo_date) - 2020) * 52),
+#          week_name = ymd("2020-01-01") + weeks(week)) 
 
 # patient_ddimer <- patient_obs %>%
 #   left_join(lab_bounds, by = c('concept_code' = 'LOINC')) %>%

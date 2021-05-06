@@ -233,13 +233,33 @@ lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
 ```
 
 ```{r}
-data.frame(theta, te = missing_by_patient$TE) %>% 
+topic_df <- data.frame(theta, te = missing_by_patient$TE) %>% 
   pivot_longer(- te, names_to = 'topic') %>% 
-  mutate(topic = gsub('X', 'Topic ', topic)) %>% 
+  mutate(topic = gsub('X', 'Topic ', topic))
+
+topic_df %>% 
   ggplot(aes(x = te, y = value)) +
   geom_boxplot(alpha = 0.2) +
   facet_wrap(~ topic, scales = 'free') +
   NULL
+```
+
+Significance by TE:
+```{r}
+topic_plots <- list()
+anno_positions <- c(0.353, 0.05, 0.08, 0.08, 0.365)
+for (i in (1:K)){
+  topic_plots[[i]] <- topic_df %>% 
+    filter(topic == paste('Topic', i)) %>% 
+    ggplot(aes(x = te, y = value, color = te)) +
+    stat_summary(fun.data = "mean_cl_boot", size = 1, stroke = 0.2, fatten = 1.5) +
+    facet_wrap(~ topic, scales = 'free') +
+    guides(color = FALSE) +
+    ggpubr::stat_compare_means(label.y = anno_positions[i]) +
+    labs(x = NULL, y = NULL) +
+    NULL
+}
+cowplot::plot_grid(plotlist = topic_plots)
 ```
 
 To get the interactive visualization, please uncomment the following lines,

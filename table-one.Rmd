@@ -10,23 +10,10 @@ knit: (function(inputFile, encoding) {
 data_dir <- "../4ce/Input"
 # install.packages('stm', 'tidytext', 'furrr')
 
-library(ggplot2)
-library(readr)
-library(dplyr)
-library(tidyr)
-library(forcats)
+library(tidyverse)
 # library(DT)
-# library(tibble)
 # library(cowplot)
 # library(ggridges)
-library(lubridate)
-library(stringr)
-# library(topicmodels)
-# library(LDAvis)
-# library(stm)
-# library(xgboost)
-# library(e1071)
-# library(yardstick)
 
 for (r_file in list.files('R', full.names = TRUE, pattern = '.R$')) source(r_file)
 
@@ -56,8 +43,8 @@ obs_raw <-
 #   )
 
 # Code, Descriptions and Ranges
-lab_mapping <- read_csv("public-data/loinc-map.csv")
-lab_bounds <- read_csv("public-data/lab_bounds.csv")
+lab_mapping <- readr::read_csv("public-data/loinc-map.csv")
+lab_bounds <- readr::read_csv("public-data/lab_bounds.csv")
 lab_names <- lab_bounds$short_name
 
 demo_raw <-
@@ -187,8 +174,8 @@ demo_df <- demo_processed %>%
   # replace_na(list(neuro_type = "None")) %>%
   # mutate() %>% 
   {.}
-index_scores_elix <- get_elix_mat(obs_first_hosp, icd_version) %>%
-  right_join0(select(demo_raw, patient_num), by = "patient_num")
+# index_scores_elix <- get_elix_mat(obs_first_hosp, icd_version) %>%
+#   right_join0(select(demo_raw, patient_num), by = "patient_num")
 # 
 # elix_mat <- cor(select(
 #   index_scores_elix,

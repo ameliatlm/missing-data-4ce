@@ -7,15 +7,18 @@ knit: (function(inputFile, encoding) {
 ---
 
 ```{r setup, warning=FALSE, message=FALSE}
-data_dir <- "../4ce/Input"
-# install.packages('stm', 'tidytext', 'furrr')
-
-library(tidyverse)
-# library(DT)
-# library(cowplot)
-# library(ggridges)
-
 for (r_file in list.files('R', full.names = TRUE, pattern = '.R$')) source(r_file)
+required_pkgs <- c('tidyverse', 'lubridate', 'kableExtra')
+install_required(required_pkgs)
+library(tidyverse)
+library(lubridate)
+library(kableExtra)
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+data_dir <- "../4ce/Input"
 
 theme_set(theme_bw() +
   theme(
@@ -35,12 +38,6 @@ obs_raw <-
         file.path(data_dir, "LocalPatientObservations.csv"),
         col_types = list(patient_num = readr::col_character())
       )
-
-# patient_obs <- patient_obs_raw %>%
-#   filter(
-#     concept_type == "LAB-LOINC",
-#     !concept_code %in% c("2019-8", "2703-7")
-#   )
 
 # Code, Descriptions and Ranges
 lab_mapping <- readr::read_csv("public-data/loinc-map.csv")
@@ -81,18 +78,6 @@ thrombo_patient_vec <- unique(thrombo_patient$patient_num)
 ```
 
 `r n_distinct(thrombo_patient$patient_num)` patients with at least one thrombo code.
-
-```{r}
-# icd_tables <- get_tables(
-#   c('no_neuro_cond', 'neuro_cond'),
-#   nstay_df,
-#   right_join0(index_scores_elix, nstay_df, by = 'patient_num'),
-#   comorb_names_elix,
-#   blur_abs,
-#   mask_thres,
-#   'concept_code'
-# )[-3]
-```
 
 ```{r}
 #####
@@ -159,14 +144,18 @@ demo_processed <- demo_raw  %>%
     n_stay = total_stay,
     thrombo = patient_num %in% thrombo_patient_vec
   ) %>%
-  # left_join(days_count_min_max, by = 'patient_num') %>%
   left_join(readmissions, by = "patient_num") %>%
   replace_na(list(n_readmissions = 0))
 ```
 
+## group_var
+
+Please change `group_var` here to stratify patients differently.
+For example, below is when `group_var = 'thrombo'` and `group_var = 'deceased'`.
 
 ```{r}
 CurrSiteId = "UPENN"
+<<<<<<< HEAD
 demo_df <- demo_processed %>%
   # left_join(distinct(select(neuro_patients, patient_num, neuro_type)),
   #   by = "patient_num"
@@ -187,11 +176,10 @@ demo_df <- demo_processed %>%
 #   tibble::column_to_rownames("patient_num") %>%
 #   as.matrix()
 
+=======
+>>>>>>> add stratification by death
 obfus_tables <- get_tables(
-  # c("no_neuro_cond", "neuro_cond"),
-  demo_df,
-  # scores_unique,
-  # comorb_names_elix,
+  demo_processed,
   blur_abs = 0,
   mask_thres = 10,
   group_var = 'thrombo'
@@ -200,25 +188,8 @@ obfus_tables <- get_tables(
 ```
 
 
-
-
 ```{r}
-# demo_table_list <- list()
-# for (i in results) {
-#   tmp <- get(i)
-#   demo_table_list[[i]] <- tmp[[c(
-#     "first_hosp_results",
-#     "cpns_results",
-#     "demo_table"
-#   )]] %>%
-#     select(site, everything())
-# }
-
-# demo_table_list <- list(UPENN_results = obfus_tables)
-
 combined_table_wide <- 
-  # bind_rows(demo_table_list) %>%
-  # site level differences in variable names require tolower()
   obfus_tables$demo_table %>% 
   mutate(
     site = toupper(site),
@@ -247,23 +218,8 @@ combined_table_wide <-
   )
 ```
 
-```{r}
-# other_table_list <- list()
-# for (i in results) {
-#   tmp <- get(i)
-#   other_table_list[[i]] <- tmp[[c(
-#     "first_hosp_results",
-#     "cpns_results",
-#     "other_obfus_table"
-#   )]] %>%
-#     select(site, everything())
-# }
-# 
-# combined_other_table_wide <- bind_rows(other_table_list) %>%
-#   filter(grepl("Mean|Median", name))
-```
 
-## Table One
+## Table One, Thrombotic Events
 
 ```{r}
 ordered_vars <- c(
@@ -345,7 +301,123 @@ tableOne_compiled <- tableOne_raw %>%
   rename('No thrombotic events' = `FALSE`,
          'Has thrombotic events' = `TRUE`)
 
-library(kableExtra)
+
+kbl(tableOne_compiled) %>%
+  kable_paper("striped", full_width = F) %>%
+  pack_rows("Gender", 2, 3) %>%
+  pack_rows("Age", 4, 10) %>%
+  pack_rows("Race & Ethnicity", 11, 17) %>%
+  # pack_rows("Comorbidites", 20, 20) %>%
+  # pack_rows("Hospital Course", 21, 21) %>%
+  pack_rows("Severity", 20, 21) %>%
+  pack_rows("Survival", 22, 23) %>%
+  pack_rows("Readmission", 18, 19) %>%
+  {.}
+```
+
+
+## Table One, Death
+
+Please change `group_var` here to stratify patients differently.
+
+```{r}
+CurrSiteId = "UPENN"
+obfus_tables <- get_tables(
+  demo_processed,
+  blur_abs = 0,
+  mask_thres = 10,
+  group_var = 'deceased'
+) %>%
+  lapply(function(x) mutate(x, site = CurrSiteId))
+```
+
+
+```{r}
+combined_table_wide <- 
+  obfus_tables$demo_table %>% 
+  mutate(
+    site = toupper(site),
+    variable = tolower(variable),
+    Demo_var = sub("\\..*", "", variable),
+    Demo_var_i = sub(".*\\.", "", variable) %>%
+      gsub("_", " ", .) %>%
+      str_to_title() %>%
+      recode(
+        `00to02` = "0-2",
+        `03to05` = "3-5",
+        `06to11` = "6-11",
+        `12to17` = "12-17",
+        `18to25` = "18-25",
+        `26to49` = "26-49",
+        `50to69` = "50-69",
+        `70to79` = "70-79",
+        `80plus` = "80+",
+        race.white = "White",
+        race.american_indian = "American Indian",
+        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
+        `Hispanic Latino` = "Hispanic/Latino",
+        `False` = "Not Readmitted",
+        `True` = "Readmitted"
+      )
+  )
+```
+
+
+```{r}
+
+tableOne_inter <- combined_table_wide %>%
+  group_by(variable, Demo_var, Demo_var_i) %>%
+  summarise(across(
+    starts_with("n_var"),
+    function(x) sum(x, na.rm = TRUE)
+  ), .groups = "drop")
+
+
+tableOne_raw <- tableOne_inter %>%
+  filter(Demo_var == "sex") %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  data.frame(
+    variable = "all",
+    Demo_var = "all",
+    Demo_var_i = "All Patients",
+    .
+  ) %>%
+  bind_rows(tableOne_inter) %>%
+  mutate(
+    N = rowSums(across(where(is.numeric))),
+    Demo_var = factor(Demo_var, levels = ordered_vars)
+  ) %>%
+  group_by(Demo_var) %>%
+  mutate(across(
+    starts_with("n_var"),
+    function(x) {
+      paste0(x, " (", round(x / sum(x, na.rm = TRUE) * 100, 1), "%", ")")
+    }
+  )) %>%
+  ungroup() %>%
+  arrange(Demo_var) %>%
+  select(Demo_var_i, N, starts_with("n_var")) %>%
+  `colnames<-`(gsub(
+    x = names(.),
+    pattern = "n_var_",
+    replacement = ""
+  )) %>%
+  rename("Table 1" = Demo_var_i) 
+
+tableOne_compiled <- tableOne_raw %>%
+  mutate(
+    N = case_when(
+      grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
+      grepl("Median time to severe", `Table 1`) ~ get_table_n("Severe"),
+      grepl("death", `Table 1`) ~ get_table_n("Deceased"),
+      grepl("readmission", `Table 1`) ~ get_table_n("Readmitted"),
+      grepl("Median Elixhauser score", `Table 1`) ~ get_table_n("All Patients"),
+      TRUE ~ N
+    )
+  ) %>% 
+  rename('Survived' = `0`,
+         'Died' = `1`)
+
 kbl(tableOne_compiled) %>%
   kable_paper("striped", full_width = F) %>%
   pack_rows("Gender", 2, 3) %>%

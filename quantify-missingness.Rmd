@@ -5,8 +5,11 @@ date: "27 October 2020"
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 ---
+```{r setup}
+source('R/utils.R')
+required_pkgs <- c('tidyverse', 'lubridate', 'ggridges', 'cowplot', 'DT')
+install_required(required_pkgs)
 
-```{r setup, warning=FALSE, message=FALSE}
 library(tidyverse)
 library(DT)
 library(lubridate)
@@ -53,6 +56,7 @@ te_patients <- patient_obs %>%
     concept_code %in% thrombo_codes,
     days_since_admission >= 0
   ) 
+
 ```
 
 ## Read in files 
@@ -231,6 +235,7 @@ days_count_min_max <-
   add_count(severity, name = 'n_severity') %>%
   {.}
 
+<<<<<<< HEAD
 penn_agg_n_values <- days_count_min_max %>% 
   count(severity, n_severity, n_values,
         name = 'n_nvals')
@@ -245,6 +250,24 @@ penn_agg_n_values %>%
 (n_severe <- sum(days_count_min_max$severity == 'severe'))
 (n_nonsevere <- sum(days_count_min_max$severity == 'nonsevere'))
 ```
+=======
+# penn_agg_n_values <- days_count_min_max %>% 
+#   count(severity, n_severity, n_values,
+#         name = 'n_nvals')
+# penn_agg_max_day <- days_count_min_max %>% 
+#   count(severity, n_severity, max_day,
+#         name = 'n_maxday')
+# 
+# penn_agg_n_values %>% 
+#   ggplot(aes(x = n_nvals)) +
+#   geom_bar()
+# 
+# (n_severe <- sum(days_count_min_max$severity == 'severe'))
+# (n_nonsevere <- sum(days_count_min_max$severity == 'nonsevere'))
+```
+
+
+>>>>>>> cleaning, wip
 
 ## Histogram of the number of days with at least one observation
 ```{R}
@@ -451,7 +474,7 @@ sessionInfo()
 ```
 
 ```{r}
-save(penn_na_df, penn_agg_n_values, penn_agg_max_day, penn_patient_lab,
+save(penn_na_df, penn_patient_lab, # penn_agg_n_values, penn_agg_max_day,
      # multiple_imps,
      file = 'results/penn-results.Rdata')
 ```

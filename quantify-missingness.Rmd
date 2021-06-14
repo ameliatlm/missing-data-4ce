@@ -177,11 +177,11 @@ patient_obs_long <- patient_obs_wide %>%
 
 get_pat_labs <- function(labi){
   patients_labs <- patient_obs_long %>% 
-  filter(lab == labi) %>% 
-  count(patient_num) %>% 
-  pull(n) %>% 
-  hist(., breaks = seq(0, max(.), 1))
-
+    filter(lab == labi) %>% 
+    count(patient_num) %>% 
+    pull(n) %>% 
+    hist(., breaks = seq(0, max(.), 1), main = labi)
+  
   patients_labs[[1]] <- patients_labs[[1]][-1] 
   data.frame(
     do.call(cbind.data.frame, patients_labs[1:3]),

@@ -15,3 +15,11 @@ right_join0 <- function(x, y, fill = 0L, ...){
   tmp <- setdiff(names(z), names(y))
   tidyr::replace_na(z, setNames(as.list(rep(fill, length(tmp))), tmp))
 }
+
+install_required <- function(required_pkgs){
+  new_packages <- required_pkgs[!(required_pkgs %in% installed.packages()[,"Package"])]
+  
+  if(length(new_packages)) 
+    install.packages(new_packages)
+}
+

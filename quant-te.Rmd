@@ -6,10 +6,17 @@ knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 ---
 
-```{r setup, warning=FALSE, message=FALSE}
-data_dir <- "../4ce/Input"
+```{r setup}
+source('R/utils.R')
+required_pkgs <- c('tidyverse', 'lubridate', 'rcartocolor')
+install_required(required_pkgs)
 library(tidyverse)
 library(lubridate)
+library(rcartocolor)
+```
+
+```{r warning=FALSE, message=FALSE}
+data_dir <- "../4ce/Input"
 
 theme_set(theme_bw() +
   theme(

@@ -5,14 +5,19 @@ output: html_document
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 ---
-
-```{r setup, warning=FALSE, message=FALSE}
-my_dir <- "../4ce/Input"
-# install.packages('stm', 'tidytext', 'furrr')
+```{r setup}
+source('R/utils.R')
+required_pkgs <- c('tidyverse', 'lubridate', 'stm', 'RColorBrewer')
+install_required(required_pkgs)
 
 library(tidyverse)
 library(lubridate)
 library(stm)
+library(RColorBrewer)
+```
+
+```{r warning=FALSE, message=FALSE}
+my_dir <- "../4ce/Input"
 
 theme_set(theme_bw() +
   theme(
@@ -219,17 +224,24 @@ stmfit <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE
 topicQuality(stmfit, documents = x_dfm)
 ```
 
+The darker the colors, the more the presence of that lab values contribute to that topic.
 ```{r}
 beta_mat <- exp(stmfit$beta$logbeta[[1]])
 colnames(beta_mat) <- stmfit$vocab
 rownames(beta_mat) <- paste("Topic", 1:K)
-heatmap(t(beta_mat), Rowv = NA, Colv = NA)
+heatmap(t(beta_mat), Rowv = NA, Colv = NA, 
+        col= colorRampPalette(brewer.pal(8, "Blues"))(25),
+        main = "Unordered")
+heatmap(t(beta_mat), main = "Ordered",
+        col= colorRampPalette(brewer.pal(8, "Blues"))(25))
+legend(x="topleft", legend=c("min", "ave", "max"), 
+     fill=colorRampPalette(brewer.pal(8, "Blues"))(3))
 save(all_evals, beta_mat, file = "results/beta_matrix.Rdata")
 ```
 
 ```{r}
 theta <- stmfit$theta
-lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
+# lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
 ```
 
 ```{r}

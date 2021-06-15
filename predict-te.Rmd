@@ -241,7 +241,7 @@ save(all_evals, beta_mat, file = "results/beta_matrix.Rdata")
 
 ```{r}
 theta <- stmfit$theta
-# lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
+lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
 ```
 
 ```{r}

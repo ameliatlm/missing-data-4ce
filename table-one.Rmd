@@ -155,29 +155,7 @@ For example, below is when `group_var = 'thrombo'` and `group_var = 'deceased'`.
 
 ```{r}
 CurrSiteId = "UPENN"
-<<<<<<< HEAD
-demo_df <- demo_processed %>%
-  # left_join(distinct(select(neuro_patients, patient_num, neuro_type)),
-  #   by = "patient_num"
-  # ) %>%
-  # replace_na(list(neuro_type = "None")) %>%
-  # mutate() %>% 
-  {.}
-# index_scores_elix <- get_elix_mat(obs_first_hosp, icd_version) %>%
-#   right_join0(select(demo_raw, patient_num), by = "patient_num")
-# 
-# elix_mat <- cor(select(
-#   index_scores_elix,
-#   -c(patient_num, elixhauser_score)
-# ))
-# 
-# elix_pca <- index_scores_elix %>%
-#   select(-elixhauser_score) %>%
-#   tibble::column_to_rownames("patient_num") %>%
-#   as.matrix()
 
-=======
->>>>>>> add stratification by death
 obfus_tables <- get_tables(
   demo_processed,
   blur_abs = 0,

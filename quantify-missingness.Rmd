@@ -26,6 +26,9 @@ theme_update(
 
 
 ```{r warning=FALSE, message=FALSE}
+
+#Read in local patient summary
+
 data_dir <- "../4ce/Input/"
 demo_raw <-
   readr::read_csv(
@@ -41,10 +44,15 @@ demo_raw <-
       last_discharge_date
     )
   )
+
+#Read in thrombotic icd codes. Add column "truncated code" for first three characters of each code. Extract unique truncated codes. 
+
 thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase2.1AKIRPackage/ac19716a4586f45c398728fcd821ca9d5baffe45/FourCePhase2.1AKI/data-raw/thromb_icd_code.csv") %>%
   mutate(truncated_code = substr(icd_code, 1, 3)) %>%
   pull(truncated_code) %>%
   unique()
+
+#Extract information for patients with codes for thrombotic events
 
 patient_obs <- read_csv(
   file.path(data_dir, "LocalPatientObservations.csv"),
@@ -79,6 +87,8 @@ lab_names <- lab_bounds$short_name
 ```{R}
 # setdiff(patient_obs$concept_code %>% unique(), lab_bounds$LOINC)
 
+#Generate a table that contains information about each lab for each individual patient. Clean up data by removing observations with missing lab names or < 0 days since admission. Each observation is identified by their patient number and days since admission, and each lab name and value is included. If there is more than one lab value for that identifier, they are averaged. Also add severity column. 
+
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
   filter(days_since_admission >= 0, !is.na(short_name)) %>%
@@ -94,11 +104,16 @@ patient_obs_wide <- patient_obs %>%
     fct_recode("severe" = "1", "nonsevere" = "0")) %>%
   select(-severe)
 
+#Extract unique lab names
+
 lab_names <- intersect(lab_bounds$short_name, names(patient_obs_wide))
 ```
 
 
 ```{R}
+
+#Extract observations from patient_obs_wide that have days since admission between 0 and 20 and a thrombotic event code. Remove columns for patient ID and days since admisison.
+
 te_labs <- patient_obs_wide %>%
   filter(
     days_since_admission <= 20,
@@ -107,13 +122,123 @@ te_labs <- patient_obs_wide %>%
   mutate(te = patient_num %in% unique(te_patients$patient_num)) %>%
   select(-c(patient_num, days_since_admission))
 
+#Generate a ggplot of the missingness inside a dataframe. Cells are colored according to missingness (black indicates a missing cell and grey indicates a present cell). 
+
 vis_miss(te_labs, sort_miss = TRUE)
 ```
 
+```{R}
+
+#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. First, isolate only the first 20 medical visits for each patient. Then, for each time point, calculate the spearman correlation matrix for the missingness indicators for each lab. Generate a list of these matrices, and for each lab combination, see if at least 70% of the spearman correlations from each time point are > 0.5. If they are, isolate the combination. For all combinations that pass the threshold, generate a boxplot of the correlation values from each time point. 
+
+
+corr_miss <- function(dat, min_corr, prop_greater) {
+
+  te_labs2 <- dat %>% 
+    filter(days_since_admission <= 20,
+           days_since_admission >= 0) %>% 
+    mutate(te = patient_num %in% unique(te_patients$patient_num))
+  
+  sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
+  mat_list = list()
+  
+  for (h in 0:max(te_labs2$days_since_admission)){
+  
+  data1 = te_labs2[which(te_labs2$days_since_admission==h),]
+  
+  na_stats <- data1 %>% 
+    select(- c(days_since_admission,patient_num,te,severity)) %>% 
+    is.na() %>% 
+    `!` 
+  
+  #trying something
+  for (i in 1:ncol(na_stats)){
+    na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+  }
+  
+  sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
+  
+  for (i in 1:ncol(na_stats)){
+    for (j in 1:ncol(na_stats)){
+      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    }
+  }
+  
+  rownames(sim_mat) <- colnames(na_stats)
+  colnames(sim_mat) <- colnames(na_stats)
+  
+  mat_list[[h+1]] = sim_mat
+  
+  }
+  
+  df <- data.frame(matrix(ncol=0,nrow=21))
+  names = list()
+  final_names = c()
+  count = 0
+  for (i in 1:ncol(na_stats)){
+    for (j in 1:ncol(na_stats)){
+      name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
+      name1 <- do.call(paste, c(as.list(name1), sep = ", "))
+      name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
+      name2 <- do.call(paste, c(as.list(name2), sep = ", "))
+      if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
+        test_vec = c()
+        for (h in 1:length(mat_list)){
+          test_vec[h] = mat_list[[h]][i,j]
+        }
+        if (mean(abs(test_vec) > min_corr) > prop_greater) {
+          count = count+1
+          final_names[count] = name1
+          df[,count] = test_vec
+        }
+  
+      }
+      }
+    }
+  
+  colnames(df) <- final_names
+  
+  return(df)
+
+}
+
+df = corr_miss(patient_obs_wide,0.5,0.7)
+
+boxplot(df,ylim=c(0, 1),xlab='Lab Combination',ylab='Spearman Correlation',main='Correlation Between Lab Missing Indicators')
+
+
+
+
+#Generate a heat map for the Spearman correlation between lab missingness at a given time point (in this example, second time point). Legend displays range of Spearman correlation values. 
+
+library(RColorBrewer)
+
+which_mat = 2
+
+heatmap(mat_list[[which_mat]],scale="none",,cexRow=1,cexCol=1,margins=c(8,6))
+
+legend(x="bottomright", legend=c(round(min(mat_list[[which_mat]]),2),round(((max(mat_list[[which_mat]])+min(mat_list[[which_mat]]))/2),2), max(mat_list[[which_mat]])), 
+     fill=colorRampPalette(brewer.pal(8, "Oranges"))(3))
+
+```
+
+
 ```{r}
+
+#Plot pattern of missingness using upset plot. Visualize number of missing values for sets of data. Uses 7 sets (7 variables) and 10 intersections (10 interactions)
+
 gg_miss_upset(te_labs, nsets = 7, nintersects = 10)
+
+#Plot number of missings for each lab, broken down by no thrombotic event vs. presence of thrombotic event(s)
+
 gg_miss_fct(x = te_labs, fct = te)
+
+#Plot number of missing lab values for each observation (patient time point)
+
 gg_miss_case(te_labs)
+
+#Plot number of missing values for each lab
+
 gg_miss_var(te_labs) +
   theme(
     panel.grid.minor = element_blank(),
@@ -121,6 +246,8 @@ gg_miss_var(te_labs) +
   ) +
   scale_y_continuous(expand = expansion(0, c(0, 1000))) +
   xlab(NULL)
+
+#Plot percent of missing values for each lab
 
 gg_miss_var(te_labs, show_pct = TRUE) +
   theme(
@@ -140,10 +267,15 @@ gg_miss_var(te_labs, show_pct = TRUE) +
 
 ```{R}
 # check NAs in the Wide format
+
+#Create True / False dataframe for whether or not a lab is missing for each observation
+
 na_stats <- patient_obs_wide %>%
   select(-c(patient_num, days_since_admission)) %>%
   is.na() %>%
   `!`()
+
+#Create new dataframe containing number of values and proportion of values existing per lab 
 
 na_df <- data.frame(
   value_existed = colSums(na_stats),
@@ -155,10 +287,14 @@ na_df <- data.frame(
     lab = fct_reorder(lab, value_existed)
   )
 
+#Plot number of values per lab
+
 n_values <- na_df %>%
   ggplot(aes(x = value_existed, y = lab)) +
   geom_col() +
   labs(x = "Number of values", y = NULL)
+
+#Plot proportion of values per lab. Valid value indicates existing values. 
 
 na_prob <- na_df %>%
   rename("Valid value" = prop_existed, "NA" = prop_na) %>%
@@ -182,6 +318,9 @@ penn_na_df <- na_df
 
 
 ```{r}
+
+#Keep the patient num and days_since_admission variables, and convert the individual lab name variables into one single variable where each observation is the name of the lab, and create another variable for the corresponding lab values. 
+
 patient_obs_long <- patient_obs_wide %>%
   pivot_longer(-c(patient_num, days_since_admission, severity),
     names_to = "lab", values_to = "value",
@@ -192,6 +331,8 @@ patient_obs_long <- patient_obs_wide %>%
 
 ```{r fig.show='hide'}
 # number of patients per lab value
+
+#For an individual lab, obtain number of lab observations per patient. Plot a histogram of the number of lab observations for each patient. Create dataframe containing counts and density for each lab.
 
 get_pat_labs <- function(labi) {
   patients_labs <- patient_obs_long %>%
@@ -207,10 +348,15 @@ get_pat_labs <- function(labi) {
   )
 }
 
+#Run function for each lab and bind the rows from each dataframe
+
 patient_lab <- lapply(unique(patient_obs_long$lab), get_pat_labs) %>%
   bind_rows()
 
 penn_patient_lab <- patient_lab
+
+
+#Replicate each row by the length of the dataframe
 
 melt_patient_lab <- patient_lab[rep(1:nrow(patient_lab), patient_lab$counts), ]
 ```
@@ -301,6 +447,9 @@ penn_agg_max_day %>%
 ## Analyze missingness and frequency of measures for each lab
 
 ```{r}
+
+#Count the number of observations for each individual patient.  Then count the number of patients that have x severe observations and z nonsevere observations for a given lab (for the range of x and z observations for a given lab). Add a column for both severities. Add another column for the proportion of severe patients that have x severe observations for a given lab out of all severe patients. Do this for non-severe and both severities. 
+
 per_lab <- patient_obs_long %>%
   group_by(lab, patient_num, severity) %>%
   count(name = "n_obs") %>%
@@ -390,6 +539,9 @@ patient_obs_long %>%
 "Binned" heatmap
 
 ```{r fig.width=12}
+
+#Generate a heatmap in which darker purple colors indicate a higher proportion of patients in a given bin (detailing the number of values a patient has for a given lab). 
+
 per_lab %>%
   mutate(obs_bin = cut(
     n_obs,

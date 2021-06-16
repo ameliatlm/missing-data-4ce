@@ -42,6 +42,8 @@ lab_mapping <- read_csv("public-data/loinc-map.csv")
 lab_bounds <- read_csv("public-data/lab_bounds.csv")
 lab_names <- lab_bounds$short_name
 
+#Read in local patient summary
+
 demo_raw <-
   readr::read_csv(
     file.path(my_dir, "LocalPatientSummary.csv"),
@@ -61,6 +63,9 @@ data_dir <- "../4ce/Input/"
 ```
 
 ```{r}
+
+#Read in thrombotic icd codes. Add column "truncated code" for first three characters of each code. Extract unique truncated codes.
+
 thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase2.1AKIRPackage/ac19716a4586f45c398728fcd821ca9d5baffe45/FourCePhase2.1AKI/data-raw/thromb_icd_code.csv") %>%
   mutate(truncated_code = substr(icd_code, 1, 3)) %>%
   pull(truncated_code) %>%
@@ -69,6 +74,9 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
 
 
 ```{r}
+
+#Isolate patients with thrombotic events and remove the days_since_admission column. 
+
 thrombo_patients <- patient_obs %>%
   filter(
     concept_type == "DIAG-ICD10",
@@ -78,6 +86,8 @@ thrombo_patients <- patient_obs %>%
   select(-days_since_admission) %>%
   distinct()
 
+#Isolate information for unique patients. Sum individual patients with thrombotic events. 
+
 demo_df <- demo_raw %>%
   mutate(
     TE = patient_num %in% unique(thrombo_patients$patient_num),
@@ -85,6 +95,9 @@ demo_df <- demo_raw %>%
     severe = severe == 1
   )
 demo_df$TE %>% sum()
+
+#Generate a table that contains information about each lab for each individual patient. Each observation is identified by their patient number and days since admission, and each lab name and value is included. If there is more than one lab value for that identifier, they are averaged.
+
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
   select(-concept_code) %>%
@@ -107,6 +120,8 @@ err_xgbs <- vector("numeric")
 err_svms <- vector("numeric")
 all_evals <- list()
 
+#filter out observations with days since admission >= a threshold (upper_day, in this case 9 days) and days since admission  <= 0. Take out the days_since_admission column. Obtain number of lab values for each TE patient.
+
 missing_by_patient <- patient_obs_wide %>%
   filter(
     days_since_admission <= upper_day, # 10-day window
@@ -118,17 +133,26 @@ missing_by_patient <- patient_obs_wide %>%
   })) %>%
   left_join(demo_df, by = "patient_num")
 
+#Obtain total number of observations per lab for TE patients
+
 uniq_vals <-
   apply(missing_by_patient, 2, function(x) {
     length(unique(x))
   })
+
+#Isolate lab names
+
 lab_names <-
   intersect(lab_bounds$short_name, names(missing_by_patient))
+
+#Remove patients that have no lab values
 
 missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>%
   # mutate(outcome = as.factor(outcome)) %>%
   mutate(sum_labs = rowSums(across(all_of(lab_names)))) %>% 
   filter(sum_labs > 0)
+
+#Reduce dataframe to matrix with labs and values
 
 x_mat <- missing_by_patient[, lab_names]
 ```
@@ -214,6 +238,9 @@ We want to: maximize likelihood, lower bound, semantic coherence and minimize re
 - http://proceedings.mlr.press/v22/taddy12/taddy12.pdf
 
 ```{r}
+
+#Estimate the structural topic model using semi-collapsed variational EM. 
+
 K <- 5
 stmfit <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE)
 # plot.STM(stmfit,typeC="summary",xlim=c(0,0.1))
@@ -226,6 +253,9 @@ topicQuality(stmfit, documents = x_dfm)
 
 The darker the colors, the more the presence of that lab values contribute to that topic.
 ```{r}
+
+#Beta matrix contains log probabilities of labs in topics. Generate heat map of beta values for each lab.
+
 beta_mat <- exp(stmfit$beta$logbeta[[1]])
 colnames(beta_mat) <- stmfit$vocab
 rownames(beta_mat) <- paste("Topic", 1:K)

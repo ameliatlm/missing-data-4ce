@@ -1,13 +1,13 @@
 ---
 title: "Missingness analysis"
-author: Amelia Tan, Arianna Dagliati, Trang Le
-date: "27 October 2020"
+author: Amelia Tan, Arianna Dagliati, Trang Le, Emily Getzen
+date: "29 July 2021"
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 ---
 ```{r setup}
 source("R/utils.R")
-required_pkgs <- c("tidyverse", "lubridate", "ggridges", "cowplot", "naniar", "DT","RColorBrewer")
+required_pkgs <- c("tidyverse", "lubridate", "ggridges", "cowplot", "naniar", "DT","RColorBrewer","mSTEM")
 install_required(required_pkgs)
 
 library(tidyverse)
@@ -17,6 +17,7 @@ library(naniar)
 library(cowplot)
 library(ggridges)
 library(RColorBrewer)
+library(mSTEM)
 
 theme_set(theme_bw())
 theme_update(
@@ -26,11 +27,14 @@ theme_update(
 ```
 
 
+
+## Read in files. Get TE patients and AKI patients. 
 ```{r warning=FALSE, message=FALSE}
 
-#Read in local patient summary
+#Read in local patient summary: Change data_dir to the folder where your data files are located
 
 data_dir <- "../4ce/Input/"
+data_dir <- "/users/emily/Downloads"
 demo_raw <-
   readr::read_csv(
     file.path(data_dir, "LocalPatientSummary.csv"),
@@ -69,8 +73,6 @@ te_patients <- patient_obs %>%
   )
 ```
 
-## Read in files 
-and convert to wide format
 
 ```{R message=FALSE}
 # 4CE long format Labs Data
@@ -83,6 +85,151 @@ lab_names <- lab_bounds$short_name
 
 # load('public-data/code.dict.rda')
 ```
+
+```{R message=FALSE}
+
+#Get AKI patients
+
+#Code from AKI Group (https://github.com/covidclinical/Phase2.1AKIRPackage)
+
+observations = patient_obs
+demographics = demo_raw
+
+demographics <- demographics %>% dplyr::mutate(patient_id=paste("Penn",patient_num,sep="_"))
+
+
+    demographics_filt <- demographics %>% dplyr::mutate(time_to_severe = ifelse(severe == 1, as.numeric(as.Date(severe_date) - as.Date(admission_date)),NA))
+    demographics_filt <- demographics_filt %>% dplyr::mutate(time_to_death = ifelse(deceased == 1, as.numeric(as.Date(death_date) - as.Date(admission_date)),NA))
+    demographics_filt <- demographics_filt %>% dplyr::mutate(length_stay = ifelse(still_in_hospital==1,days_since_admission,as.numeric(as.Date(last_discharge_date) - as.Date(admission_date))))
+    
+    # Reorder the columns to be more readable
+    demographics_filt <- demographics_filt %>% dplyr::select(patient_num,siteid,sex,age_group,race,length_stay,severe,time_to_severe,deceased,time_to_death)
+    
+
+
+diagnosis <- observations[observations$concept_type %in% c("DIAG-ICD9","DIAG-ICD10"),-6]
+    colnames(diagnosis) <- c("patient_num","siteid","days_since_admission","concept_type","icd_code")
+    
+
+procedures <- observations[observations$concept_type %in% c("PROC-ICD9", "PROC-ICD10"),-6]
+colnames(procedures) <- c("patient_num","siteid","days_since_admission","icd_version","procedure_code")
+    
+# Extract serum Cr levels
+    labs_cr_aki <- observations[observations$concept_code == '2160-0',] #LOINC code for Cr 2160-0
+    # Remove unnecessary columns
+    labs_cr_aki <- labs_cr_aki[,-c(4,5)]
+    # Filter for labs >= -90 days
+    labs_cr_aki <- labs_cr_aki %>% dplyr::filter(days_since_admission >= -90)
+    
+    # Generate separate demographics table for patients who do not have any sCr values fulfilling 
+    # the above (e.g. all the labs are before t= -90days or patient has no sCr value)
+    message("Removing patients who do not have any serum creatinine values during admission...")
+    pts_valid_cr <- labs_cr_aki %>% dplyr::filter(days_since_admission >= 0)
+    pts_valid_cr <- unique(pts_valid_cr$patient_num)
+    demog_no_cr <- demographics_filt[!(demographics_filt$patient_num %in% pts_valid_cr),]
+    demographics_filt <- demographics_filt[demographics_filt$patient_num %in% pts_valid_cr,]
+    labs_cr_aki <- labs_cr_aki[labs_cr_aki$patient_num %in% pts_valid_cr,]
+    # There are two possible scenarios which we have to consider when detecting each AKI event:
+    # (1) AKI occurs after admission
+    #   - easy to detect with the formal KDIGO definition as we only need to use older data points
+    #   - we can use an approach similar to what is used in the MIMIC-III data-set: use a rolling
+    #     time frame and detect the lowest Cr value to use as our baseline
+    # (2) Patient presents with an AKI at the time of admission 
+    #   - this makes it harder for us to determine what is the true baseline especially with limited
+    #     longitudinal data
+    #   - Hence one way to get around this is to generate a "retrospective" baseline (i.e. look into
+    #     future Cr values and find the minimum in a rolling timeframe) and use this as a surrogate
+    #     baseline
+    #   - Such a workaround is the only feasible way of dealing with missing retrospective data though
+    #     it is likely that we may miss quite a number of true AKIs using this method
+    
+    # Scenario (1): AKI occurs during admission
+    # Find minimum Cr level in a rolling 90 day timeframe
+    message("Generating minimum Cr level in the past 90 days")
+    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
+    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-90,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
+    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_90d = RcppRoll::roll_min(value,91,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
+    # Find minimum Cr level in a rolling 2 day timeframe (48h)
+    message("Generating minimum Cr level in the past 48h")
+    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
+    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-2,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
+    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
+    
+    # Scenario (2): Patient presents with an AKI already on board
+    # Find minimum Cr level in a rolling 7 day timeframe
+    message("Generating minimum Cr level 7 days in the future")
+    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
+    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+7))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
+    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_retro_7day = RcppRoll::roll_min(value,8,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
+    # Find minimum Cr level in a rolling 2 day timeframe (48h)
+    message("Generating minimum Cr level 48h in the future")
+    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
+    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+2))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
+    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h_retro = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
+    
+  
+labs_cr_aki <- data.table::setDT(labs_cr_aki)[,':='(cr_7d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+7,incbounds = TRUE)],1),cr_90d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+90,incbounds = TRUE)],1)),by=c('patient_num','days_since_admission')][]
+    
+    # At this point, our table has these headers:
+    # patient_id  siteid  days_since_admission  value min_cr_90d min_cr_48h  min_cr_retro_7day min_cr_48h_retro  cr_7d cr_90d
+    
+    # Now we have to start grading AKI severity at each time point
+    # This approach is similar to how the MIMIC-III dataset generates AKI severity
+    # Generate two columns using both the formal KDIGO AKI definition and the modified retrospective AKI definition
+    message("Generating KDIGO severity grades for each serum Cr value")
+    labs_cr_aki$aki_kdigo <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade)
+    labs_cr_aki$aki_kdigo_retro <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade_retro)
+    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(aki_kdigo_final = max(aki_kdigo,aki_kdigo_retro))
+    
+    # Generate two columns grading AKD severity at 7d and 90d (grade 0B/C is coded as 0.5)
+    labs_cr_aki$akd_7d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_7d)
+    labs_cr_aki$akd_90d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_90d)
+    
+    # Now we are going to generate the start days of each AKI
+    labs_cr_aki_tmp <- labs_cr_aki
+    labs_cr_aki_tmp$valid = 1
+    
+    # Find the day of the minimum Cr used for grading AKIs (taken as baseline)
+    message("Now finding the day at which the minimum serum Cr is achieved")
+    labs_cr_aki_tmp <- labs_cr_aki_tmp %>% dplyr::group_by(patient_num) %>% tidyr::complete(days_since_admission = tidyr::full_seq(days_since_admission,1)) %>% dplyr::mutate(value = zoo::na.fill(value,Inf))
+    labs_cr_aki_tmp2 <- labs_cr_aki_tmp
+    labs_cr_aki_tmp3 <- labs_cr_aki_tmp
+    labs_cr_aki_tmp2 <- labs_cr_aki_tmp2 %>% split(.$patient_num) %>% purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
+    colnames(labs_cr_aki_tmp2)[2] <- "day_min"
+    labs_cr_aki_tmp3 <- labs_cr_aki_tmp3 %>% split(.$patient_num) %>%  purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
+    colnames(labs_cr_aki_tmp3)[2] <- "day_min_retro"
+    labs_cr_aki_tmp4 <- cbind(labs_cr_aki_tmp,"day_min" = labs_cr_aki_tmp2$day_min,"day_min_retro" = labs_cr_aki_tmp3$day_min_retro)
+    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4[!is.na(labs_cr_aki_tmp4$valid),]
+    
+    # Generate delta_cr
+    message("Now identifying maxima points of serum Cr")
+    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(min_cr_7d_final = min(min_cr_90d,min_cr_retro_7day,na.rm=TRUE)) %>% dplyr::mutate(delta_cr = value - min_cr_7d_final)
+    
+    # Use the largest delta_cr to find the peak of each AKI
+    labs_cr_aki_delta_maxima <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num) %>% dplyr::filter(delta_cr %in% delta_cr[which.peaks(delta_cr,decreasing=FALSE)])
+    labs_cr_aki_delta_maxima$delta_is_max = 1
+    labs_cr_aki_delta_maxima <- labs_cr_aki_delta_maxima %>% dplyr::rename(delta_maxima = delta_cr) %>% dplyr::select(patient_num,days_since_admission,delta_maxima,delta_is_max)
+    labs_cr_aki_tmp4 <- merge(labs_cr_aki_tmp4,labs_cr_aki_delta_maxima,by=c("patient_num","days_since_admission"),all.x=TRUE)
+    
+    # Filter for KDIGO grades > 0
+    message("Now generating tables of all AKI events")
+    labs_cr_aki_tmp5 <- labs_cr_aki_tmp4[labs_cr_aki_tmp4$aki_kdigo_final > 0,]
+    labs_cr_aki_tmp5[is.na(labs_cr_aki_tmp5)] <- 0
+    # Filter for maxima of delta_cr (which should give us the peaks)
+    labs_cr_aki_tmp5 <- labs_cr_aki_tmp5[labs_cr_aki_tmp5$delta_is_max > 0,]
+    
+    # Filter and reorder columns to generate our final table of all AKI events
+    labs_aki_summ <- labs_cr_aki_tmp5 %>% dplyr::select(patient_num,siteid,days_since_admission,value,day_min,day_min_retro,min_cr_90d,min_cr_48h,min_cr_retro_7day,min_cr_48h_retro,min_cr_7d_final,cr_7d,cr_90d,delta_cr,aki_kdigo,aki_kdigo_retro,aki_kdigo_final,akd_7d,akd_90d)
+    
+    labs_aki_summ <- labs_aki_summ %>% dplyr::distinct(patient_num,days_since_admission,.keep_all=TRUE)
+    labs_aki_summ <- labs_aki_summ %>% dplyr::filter(days_since_admission >= 0)
+    
+    
+AKI_patients <- patient_obs[patient_obs$patient_num %in% as.integer(unique(labs_aki_summ$patient_num)),]
+
+       
+```   
+
 
 
 ```{R}
@@ -108,8 +255,666 @@ patient_obs_wide <- patient_obs %>%
 #Extract unique lab names
 
 lab_names <- intersect(lab_bounds$short_name, names(patient_obs_wide))
+
+
+
+Severe_patients <- patient_obs_wide[patient_obs_wide$severity == "severe",]
 ```
 
+
+```{R}
+
+
+avgs = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+
+props = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+ct = 1
+for (i in 1:length(unique(patient_obs_wide$patient_num))) {
+  for (j in 1:ncol(avgs)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      avgs[ct,j] = num_miss
+      props[ct,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(avgs)){
+        ct = ct + 1
+      }
+    }
+  }
+}
+
+dat_prop = colMeans(props)
+dat_sd_prop = apply(props,2,sd)
+dat_num = colMeans(avgs)
+dat_sd_num = apply(avgs,2,sd)
+site = rep("Penn",length(dat_prop))
+df_prop = data.frame(Labs = colnames(avgs), Avg_Prop_Miss = dat_prop,sd = dat_sd_prop,Site=site)
+df_num = data.frame(Labs = colnames(avgs), Avg_Num_Miss = dat_num,sd = dat_sd_num,Site=site)
+
+df_prop$Labs <- factor(df_prop$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_num$Labs <- factor(df_prop$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+
+prop_plot = ggplot(data = df_prop,
+       aes(x = Labs,
+           y = Avg_Prop_Miss,
+           fill = Site)) +
+         geom_bar(stat = "identity") + 
+          labs(x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) +
+        geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = pmin(Avg_Prop_Miss + sd,1)), width = .2,position=position_dodge(.9)) 
+
+prop_plot 
+
+num_plot = ggplot(data = df_num,
+       aes(x = Labs,
+           y = Avg_Num_Miss,
+           fill = Site)) +
+         geom_bar(stat = "identity") + 
+          labs(x = "Labs",y = "Average Number Missing Per Patient",fill="Site") +
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) +
+    geom_errorbar(aes(ymin=pmax(Avg_Num_Miss-sd,0),ymax = Avg_Num_Miss + sd), width = .2,position=position_dodge(.9)) 
+
+num_plot
+
+df_prop_penn = df_prop
+df_num_penn = df_num
+
+require(gridExtra)
+grid.arrange(prop_plot,num_plot,ncol=1)
+
+
+
+
+
+
+```
+```{R}
+
+#Stratify by sex!
+
+props_M = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_F = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+
+indices_M = which(demo_raw$sex=="male")
+indices_F = which(demo_raw$sex=="female")
+
+ct = 1
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_M){
+  
+  for (j in 1:ncol(props_M)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_M[ct,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_M)){
+        ct = ct + 1
+      }
+    }
+  }
+  }
+}
+
+
+ct = 1
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_F){
+  for (j in 1:ncol(props_F)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_F[ct,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_F)){
+        ct = ct + 1
+      }
+    }
+  }
+  }
+}
+
+
+
+dat_prop_M = colMeans(props_M)
+dat_prop_F = colMeans(props_F)
+dat_sd_M= apply(props_M,2,sd)
+dat_sd_F= apply(props_F,2,sd)
+diff = dat_prop_M-dat_prop_F
+
+sex_M = rep("Male",length(dat_prop_M))
+sex_F = rep("Female",length(dat_prop_F))
+df_prop_M = data.frame(Labs = colnames(props_M), Avg_Prop_Miss = dat_prop_M,sd = dat_sd_M,Sex=sex_M)
+df_prop_M$Labs <- factor(df_prop_M$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_F = data.frame(Labs = colnames(props_F), Avg_Prop_Miss = dat_prop_F,sd = dat_sd_F,Sex=sex_F)
+df_prop_F$Labs <- factor(df_prop_F$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_diff_sex = data.frame(Labs = colnames(props_F), Avg_Prop_Miss = diff)
+df_prop_diff_sex$Labs <- factor(df_prop_diff_sex$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+
+
+df_prop_Sex = rbind(df_prop_M,df_prop_F)
+site = rep("Penn",nrow(df_prop_Sex))
+df_prop_Sex$Site = site
+
+prop_plot_Sex = ggplot(data = df_prop_Sex,
+       aes(x = Labs,
+           y = Avg_Prop_Miss,
+           fill = Sex)) +
+         geom_bar(stat = "identity",width=0.8,position=position_dodge()) + 
+          labs(title = "Stratified by Sex", x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Sex")+
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) +
+    geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .1,position=position_dodge(.9)) 
+
+prop_plot_Sex
+
+df_prop_diff_sex_penn = df_prop_diff_sex
+Site = rep("Penn",nrow(df_prop_diff_sex_penn))
+df_prop_diff_sex_penn$site = Site
+
+
+prop_plot_diff_sex_penn = ggplot(data = df_prop_diff_sex_penn,
+       aes(x = reorder(Labs,Avg_Prop_Miss),
+           y = Avg_Prop_Miss,
+           fill = site)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Stratified by Sex",x = "Labs",y = "Mean Difference in Proportion Missing Per Patient",fill="Site") +
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) 
+
+prop_plot_diff_sex_penn
+
+
+#Stratify by severity!
+
+
+props_S = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_NS = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+
+indices_S = which(demo_raw$severe==1)
+indices_NS = which(demo_raw$severe==0)
+
+ct = 1
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_S){
+  
+  for (j in 1:ncol(props_S)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_S[ct,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_S)){
+        ct = ct + 1
+      }
+    }
+  }
+  }
+}
+
+
+ct = 1
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_NS){
+  for (j in 1:ncol(props_NS)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_NS[ct,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_NS)){
+        ct = ct + 1
+      }
+    }
+  }
+  }
+}
+
+
+dat_prop_S = colMeans(props_S)
+dat_prop_NS = colMeans(props_NS)
+dat_sd_prop_S = apply(props_S,2,sd)
+dat_sd_prop_NS = apply(props_NS,2,sd)
+diff = dat_prop_S-dat_prop_NS
+
+severe = rep("Severe",length(dat_prop_S))
+non_severe = rep("Non-Severe",length(dat_prop_NS))
+df_prop_S = data.frame(Labs = colnames(props_S), Avg_Prop_Miss = dat_prop_S,sd = dat_sd_prop_S,severity = severe)
+df_prop_S$Labs <- factor(df_prop_S$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_NS = data.frame(Labs = colnames(props_NS), Avg_Prop_Miss = dat_prop_NS,sd = dat_sd_prop_NS,severity = non_severe)
+df_prop_NS$Labs <- factor(df_prop_NS$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_diff_severity = data.frame(Labs = colnames(props_S), Avg_Prop_Miss = diff)
+df_prop_diff_severity$Labs <- factor(df_prop_diff_severity$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+
+df_prop_Severity = rbind(df_prop_S,df_prop_NS)
+site = rep("Penn",nrow(df_prop_Severity))
+df_prop_Severity$Site = site
+
+prop_plot_Severity = ggplot(data = df_prop_Severity,
+       aes(x = Labs,
+           y = Avg_Prop_Miss,
+           fill = severity)) +
+         geom_bar(stat = "identity",width=0.8,position=position_dodge()) + 
+          labs(title = "Stratified by Severity",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Severity")+
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) +
+    geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .1,position=position_dodge(.9)) 
+
+prop_plot_Severity
+
+df_prop_Severity_penn = df_prop_Severity
+
+df_prop_diff_Severity_penn = df_prop_diff_severity
+Site = rep("Penn",nrow(df_prop_diff_Severity_penn))
+df_prop_diff_Severity_penn$site = Site
+
+
+
+prop_plot_diff_severity_penn = ggplot(data = df_prop_diff_Severity_penn,
+       aes(x = reorder(Labs,Avg_Prop_Miss),
+           y = Avg_Prop_Miss,
+           fill = Site)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Stratified by Severity",x = "Labs",y = "Mean Difference in Proportion Missing Per Patient",fill="Site") +
+  theme(axis.text.x=element_text(angle=90,vjust = 0.5, hjust=1)) 
+
+prop_plot_diff_severity_penn
+
+
+
+#Stratify by ethnicity!
+
+
+props_W = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_B = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_A = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_HL = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_PI = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_AI = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_O = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+
+
+indices_W = which(demo_raw$race=="white")
+indices_B = which(demo_raw$race=="black")
+indices_A = which(demo_raw$race=="asian")
+indices_PI = which(demo_raw$race=="hawaiian_pacific_islander")
+indices_HL = which(demo_raw$race=="hispanic_latino")
+indices_AI = which(demo_raw$race=="american_indian" )
+indices_O = which(demo_raw$race=="other")
+
+
+
+ctw = 1
+ctb = 1
+cta = 1
+cto = 1
+ctpi = 1
+cthl = 1
+ctai = 1
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_W){
+  
+  for (j in 1:ncol(props_W)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_W[ctw,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_W)){
+        ctw = ctw + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_B){
+  
+  for (j in 1:ncol(props_B)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_B[ctb,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_B)){
+        ctb = ctb + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_A){
+  
+  for (j in 1:ncol(props_A)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_A[cta,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_A)){
+        cta = cta + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_O){
+  
+  for (j in 1:ncol(props_O)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_O[cto,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_O)){
+        cto = cto + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_HL){
+  
+  for (j in 1:ncol(props_HL)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_HL[cthl,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_HL)){
+        cthl = cthl + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_PI){
+  
+  for (j in 1:ncol(props_PI)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_PI[ctpi,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_PI)){
+        ctpi = ctpi + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_AI){
+  
+  for (j in 1:ncol(props_AI)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_AI[ctai,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_AI)){
+        ctai = ctai + 1
+      }
+    }
+  }
+  }
+}
+
+
+dat_prop_W = colMeans(props_W)
+dat_prop_B= colMeans(props_B)
+dat_prop_A = colMeans(props_A)
+dat_prop_O= colMeans(props_O)
+dat_prop_HL = colMeans(props_HL)
+dat_prop_PI= colMeans(props_PI)
+dat_prop_AI = colMeans(props_AI)
+
+dat_sd_prop_W = apply(props_W,2,sd)
+dat_sd_prop_B = apply(props_B,2,sd)
+dat_sd_prop_A= apply(props_A,2,sd)
+dat_sd_prop_O = apply(props_O,2,sd)
+dat_sd_prop_HL = apply(props_HL,2,sd)
+dat_sd_prop_PI = apply(props_PI,2,sd)
+dat_sd_prop_AI = apply(props_AI,2,sd)
+
+
+white = rep("white",length(dat_prop_W))
+black = rep("black",length(dat_prop_B))
+asian = rep("asian",length(dat_prop_A))
+hisp_latino = rep("hispanic latino",length(dat_prop_HL))
+pacific_islander = rep("hawaiian pacific islander",length(dat_prop_PI))
+american_indian = rep("american indian",length(dat_prop_AI))
+other = rep("other",length(dat_prop_O))
+
+df_prop_W = data.frame(Labs = colnames(props_W), Avg_Prop_Miss = dat_prop_W,sd = dat_sd_prop_W,race=white)
+df_prop_W$Labs <- factor(df_prop_W$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_B = data.frame(Labs = colnames(props_B), Avg_Prop_Miss = dat_prop_B,sd = dat_sd_prop_B,race=black)
+df_prop_B$Labs <- factor(df_prop_B$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_A = data.frame(Labs = colnames(props_A), Avg_Prop_Miss = dat_prop_A,sd = dat_sd_prop_A,race=asian)
+df_prop_A$Labs <- factor(df_prop_A$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_PI = data.frame(Labs = colnames(props_PI), Avg_Prop_Miss = dat_prop_PI,sd = dat_sd_prop_PI,race=pacific_islander)
+df_prop_PI$Labs <- factor(df_prop_PI$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_O = data.frame(Labs = colnames(props_O), Avg_Prop_Miss = dat_prop_O,sd = dat_sd_prop_O,race=other)
+df_prop_O$Labs <- factor(df_prop_O$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_HL = data.frame(Labs = colnames(props_HL), Avg_Prop_Miss = dat_prop_HL,sd = dat_sd_prop_HL,race=hisp_latino)
+df_prop_O$Labs <- factor(df_prop_O$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_AI = data.frame(Labs = colnames(props_AI), Avg_Prop_Miss = dat_prop_AI,sd = dat_sd_prop_AI,race=american_indian)
+df_prop_AI$Labs <- factor(df_prop_AI$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_Race = rbind(df_prop_W, df_prop_B, df_prop_A,df_prop_HL, df_prop_PI, df_prop_AI, df_prop_O)
+
+site = rep("Penn",nrow(df_prop_Race))
+df_prop_Race$Site = site
+
+df_prop_Race_penn = df_prop_Race
+
+prop_plot_W = ggplot(data = df_prop_W,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "White",y = "Mean +/- Sd Proportion Missing Per Patient") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_B = ggplot(data = df_prop_B,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Black",y = "Mean +/- Sd Proportion Missing Per Patient") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_A = ggplot(data = df_prop_A,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Asian",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_O = ggplot(data = df_prop_O,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Other",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_HL = ggplot(data = df_prop_HL,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Hispanic Latino",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_PI = ggplot(data = df_prop_PI,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "Hawaiian / Pacific Islander",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_AI = ggplot(data = df_prop_AI,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "American Indian ",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+
+
+require(gridExtra)
+grid.arrange(prop_plot_W,prop_plot_PI,prop_plot_AI,prop_plot_O,ncol=2)
+
+
+
+
+
+
+#Stratify by age!
+
+
+props_1225 = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_2649 = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_5069 = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+props_70plus = patient_obs_wide[FALSE,] %>% select(-c(patient_num,days_since_admission,severity))
+
+
+indices_1225 = which(demo_raw$age_group=="12to17" | demo_raw$age_group=="18to25")
+indices_2649 = which(demo_raw$age_group=="26to49")
+indices_5069 = which(demo_raw$age_group=="50to69")
+indices_70plus = which(demo_raw$age_group=="70to79" | demo_raw$age_group=="80plus")
+
+
+
+
+cty = 1
+ctm = 1
+cto = 1
+ctoo = 1
+
+for (i in 1:length(as.integer(unique(patient_obs_wide$patient_num)))) {
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_1225){
+  
+  for (j in 1:ncol(props_1225)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_1225[cty,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_1225)){
+        cty = cty + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_2649){
+  
+  for (j in 1:ncol(props_2649)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_2649[ctm,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_2649)){
+        ctm = ctm + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_5069){
+  
+  for (j in 1:ncol(props_5069)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_5069[cto,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_5069)){
+        cto = cto + 1
+      }
+    }
+  }
+  }
+  if (as.integer(unique(patient_obs_wide$patient_num))[i] %in% indices_70plus){
+  
+  for (j in 1:ncol(props_70plus)) {
+    dat <- filter(patient_obs_wide,patient_num==i)
+    if (nrow(dat) != 0){
+      num_miss = sum(is.na(dat[j+2]))
+      props_70plus[ctoo,j] = num_miss/(nrow(dat[j+2]))
+      if ( j == ncol(props_70plus)){
+        ctoo = ctoo + 1
+      }
+    }
+  }
+  }
+}
+
+
+dat_prop_y = colMeans(props_1225)
+dat_prop_m= colMeans(props_2649)
+dat_prop_o = colMeans(props_5069)
+dat_prop_oo= colMeans(props_70plus)
+
+
+dat_sd_prop_y = apply(props_1225,2,sd)
+dat_sd_prop_m = apply(props_2649,2,sd)
+dat_sd_prop_o= apply(props_5069,2,sd)
+dat_sd_prop_oo = apply(props_70plus,2,sd)
+
+
+young = rep("Young",length(dat_prop_y))
+middle = rep("Middle",length(dat_prop_m))
+old = rep("Old",length(dat_prop_o))
+older = rep("Older",length(dat_prop_oo))
+
+
+df_prop_y = data.frame(Labs = colnames(props_1225), Avg_Prop_Miss = dat_prop_y,sd = dat_sd_prop_y,Age=young)
+df_prop_y$Labs <- factor(df_prop_y$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_m = data.frame(Labs = colnames(props_2649), Avg_Prop_Miss = dat_prop_m,sd = dat_sd_prop_m,Age=middle)
+df_prop_m$Labs <- factor(df_prop_m$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_o = data.frame(Labs = colnames(props_5069), Avg_Prop_Miss = dat_prop_o,sd = dat_sd_prop_oo,Age=old)
+df_prop_o$Labs <- factor(df_prop_o$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_oo = data.frame(Labs = colnames(props_70plus), Avg_Prop_Miss = dat_prop_oo,sd = dat_sd_prop_oo,Age=older)
+df_prop_oo$Labs <- factor(df_prop_oo$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+
+df_prop_Age = rbind(df_prop_y, df_prop_m,df_prop_o,df_prop_oo)
+
+site = rep("Penn",nrow(df_prop_Age))
+df_prop_Age$Site = site
+
+df_prop_Age_penn = df_prop_Age
+
+prop_plot_y = ggplot(data = df_prop_y,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "12-25",y = "Mean +/- Sd Proportion Missing Per Patient") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_m = ggplot(data = df_prop_m,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "26-49",y = "Mean +/- Sd Proportion Missing Per Patient") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_o = ggplot(data = df_prop_o,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "50-69",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+prop_plot_oo = ggplot(data = df_prop_oo,
+       aes(x = Labs,
+           y = Avg_Prop_Miss)) +
+         geom_bar(stat = "identity") + 
+          labs(title = "70 plus",x = "Labs",y = "Mean +/- Sd Proportion Missing Per Patient",fill="Site") +
+  geom_errorbar(aes(ymin=pmax(Avg_Prop_Miss-sd,0),ymax = Avg_Prop_Miss + sd), width = .2,position=position_dodge(.9)) +
+        coord_flip() 
+
+
+
+require(gridExtra)
+grid.arrange(prop_plot_y,prop_plot_m,prop_plot_o,prop_plot_oo,ncol=2)
+
+
+```
 
 ```{R}
 
@@ -123,107 +928,779 @@ te_labs <- patient_obs_wide %>%
   mutate(te = patient_num %in% unique(te_patients$patient_num)) %>%
   select(-c(patient_num, days_since_admission))
 
+te_labs_penn = te_labs
+
 #Generate a ggplot of the missingness inside a dataframe. Cells are colored according to missingness (black indicates a missing cell and grey indicates a present cell). 
 
-vis_miss(te_labs, sort_miss = TRUE)
+vis_miss_penn = vis_miss(te_labs, sort_miss = TRUE)
+vis_miss_penn
 ```
 
-```{R}
-
-#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. First, isolate only the first 20 medical visits for each patient. Then, for each time point, calculate the spearman correlation matrix for the missingness indicators for each lab. Generate a list of these matrices, and for each lab combination, see if at least 70% of the spearman correlations from each time point are > 0.5. If they are, isolate the combination. For all combinations that pass the threshold, generate a boxplot of the correlation values from each time point. 
 
 
-corr_miss <- function(dat, min_corr, prop_greater) {
+```{R,warning=FALSE} 
 
-  te_labs2 <- dat %>% 
-    filter(days_since_admission <= 20,
-           days_since_admission >= 0) %>% 
-    mutate(te = patient_num %in% unique(te_patients$patient_num))
-  
-  sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
-  mat_list = list()
-  
-  for (h in 0:max(te_labs2$days_since_admission)){
-  
-  data1 = te_labs2[which(te_labs2$days_since_admission==h),]
-  
-  na_stats <- data1 %>% 
-    select(- c(days_since_admission,patient_num,te,severity)) %>% 
-    is.na() %>% 
-    `!` 
-  
-  #trying something
-  for (i in 1:ncol(na_stats)){
-    na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+#For all patients
+
+#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. Isolate events from the first 100 days since admission. Then, for each time point, calculate the spearman correlation matrix for the missingness indicators for each lab. Generate a list of these matrices, and for each lab combination, see if at least 50% of the spearman correlations from each time point are > 0.5. 
+
+#dat corresponds to the patient_obs_wide variable
+#prop_greater is the desired proportion of spearman correlation values greater than the threshold
+#min_corr corresponds to the threshold
+#type corresponds to patient type (options are all patients ("All"), TE patients ("TE"), non-TE patients ("non-TE")). Automatically set to all patients. 
+#label is how the graph should be labeled according to patient type. Automatically set to "All Patients". 
+
+patient_obs_wide <- patient_obs %>%
+  left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
+  filter(days_since_admission >= 0, !is.na(short_name)) %>%
+  select(-concept_code) %>%
+  pivot_wider(
+    id_cols = c(patient_num, days_since_admission),
+    names_from = short_name,
+    values_from = value,
+    values_fn = mean
+  ) %>%
+  left_join(select(demo_raw, patient_num, severe), by = "patient_num") %>%
+  mutate(severity = factor(severe) %>%
+    fct_recode("severe" = "1", "nonsevere" = "0")) %>%
+  select(-severe)
+
+dat = patient_obs_wide
+min_corr = 0.5
+prop_greater = 0.3
+
+te_labs2 <- dat %>% 
+  filter(days_since_admission < 100,
+         days_since_admission >= 0) %>% 
+  mutate(te = patient_num %in% unique(te_patients$patient_num))
+
+#Calculate correlation matrices between lab missing indicators for each time point
+
+sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
+mat_list = list()
+
+for (h in 0:max(te_labs2$days_since_admission)){
+
+data1 = te_labs2[which(te_labs2$days_since_admission==h),]
+
+na_stats <- data1 %>% 
+  select(- c(days_since_admission,patient_num,te,severity)) %>% 
+  is.na() %>% 
+  `!` 
+
+
+for (i in 1:ncol(na_stats)){
+  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+}
+
+sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
   }
-  
-  sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
-  
-  for (i in 1:ncol(na_stats)){
-    for (j in 1:ncol(na_stats)){
-      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
-    }
-  }
-  
-  rownames(sim_mat) <- colnames(na_stats)
-  colnames(sim_mat) <- colnames(na_stats)
-  
-  mat_list[[h+1]] = sim_mat
-  
-  }
-  
-  df <- data.frame(matrix(ncol=0,nrow=21))
-  names = list()
-  final_names = c()
-  count = 0
-  for (i in 1:ncol(na_stats)){
-    for (j in 1:ncol(na_stats)){
-      name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
-      name1 <- do.call(paste, c(as.list(name1), sep = ", "))
-      name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
-      name2 <- do.call(paste, c(as.list(name2), sep = ", "))
-      if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
-        test_vec = c()
-        for (h in 1:length(mat_list)){
-          test_vec[h] = mat_list[[h]][i,j]
-        }
-        if (mean(abs(test_vec) > min_corr) > prop_greater) {
-          count = count+1
-          final_names[count] = name1
-          df[,count] = test_vec
-        }
-  
-      }
-      }
-    }
-  
-  colnames(df) <- final_names
-  
-  results <- list()
-  results[[1]] <- df
-  results[[2]] <- mat_list
-  
-  return(results)
+}
+
+rownames(sim_mat) <- colnames(na_stats)
+colnames(sim_mat) <- colnames(na_stats)
+
+mat_list[[h+1]] = sim_mat
 
 }
 
-results = corr_miss(patient_obs_wide,0.5,0.7)
+#Add correlation values to a dataframe if a lab combination passes the threshold
 
-boxplot(results[[1]],ylim=c(0, 1),xlab='Lab Combination',ylab='Spearman Correlation',main='Correlation Between Lab Missing Indicators')
+df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+names = list()
+final_names = c()
+count = 0
 
 
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
+    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
+    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
+    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
+    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
+      test_vec = c()
+      indices = c()
+      ct = 0
+      for (h in 1:length(mat_list)){
+        if (!(is.na(mat_list[[h]][i,j]))) {
+          ct = ct+1
+          test_vec[ct] = mat_list[[h]][i,j]
+          indices[ct] = h
+        }else{
+          ct = ct + 1
+          test_vec[ct] = test_vec[ct-1]
+          indices[ct] = h
+        }
+      }
+      
+      if (mean(abs(test_vec) > min_corr) > prop_greater) {
+        count = count+1
+        final_names[count] = name1
+        df[,count] = test_vec
+        df_ind[,count] = indices
+      }
+
+    }
+    }
+}
+  
+
+colnames(df) <- final_names
+
+results <- list()
+results[[1]] <- df
+results[[2]] <- mat_list
 
 
 #Generate a heat map for the Spearman correlation between lab missingness at a given time point (in this example, second time point). Legend displays the range of Spearman correlation values. 
 
 which_mat = 2
 
-heatmap(results[[2]][[which_mat]],scale="none",,cexRow=1,cexCol=1,margins=c(8,6))
+heatmap(results[[2]][[which_mat]],scale="none",cexRow=1,cexCol=1,margins=c(8,6))
 
 legend(x="bottomright", legend=c(round(min(results[[2]][[which_mat]]),2),round(((max(results[[2]][[which_mat]])+min(results[[2]][[which_mat]]))/2),2), max(results[[2]][[which_mat]])), 
      fill=colorRampPalette(brewer.pal(8, "Oranges"))(3))
 
+
+#Analyze spearman correlations over time for lab combinations that passed the threshold.
+
+if ((ncol(df)) > 6){
+  par(mfrow=c(ncol(df),1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+}
+
+if ((ncol(df)) <= 12 & ncol(df) > 5) {
+ if (ncol(df) %% 2 != 0) {
+   par(mfrow=c((ncol(df)+1)/2,2),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+ }else{
+   par(mfrow=c(ncol(df)/2,2),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+   
+ }
+}
+
+if ((ncol(df)) <= 18 & ncol(df) > 12) {
+  if (ncol(df) %% 3 == 0) {
+    par(mfrow=c((ncol(df))/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+  }
+  if ((ncol(df)+1) %% 3 == 0) {
+    par(mfrow=c((ncol(df)+1)/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+  }
+  if ((ncol(df)+2) %% 3 == 0) {
+    par(mfrow=c((ncol(df)+2)/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+  }
+}
+  
+
+for (i in 1:ncol(df)){
+  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="",ylab="")
+  title(colnames(df)[i],line=.3,cex.main=.9)
+  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
+}
+mtext("Days since admission",side=1,line=2.4,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+
+highcorr_temporal_penn = df
+
+
+
 ```
+
+```{R,warning=FALSE}
+
+#Given list of interesting lab combinations, assess spearman correlation between lab missing indicators over time and plot. 
+
+te_labs2 <- patient_obs_wide %>% 
+  filter(days_since_admission < 100,
+         days_since_admission >= 0) %>% 
+  mutate(te = patient_num %in% unique(te_patients$patient_num))
+
+#Calculate correlation matrices between lab missing indicators for each time point
+
+sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
+mat_list = list()
+
+for (h in 0:max(te_labs2$days_since_admission)){
+
+data1 = te_labs2[which(te_labs2$days_since_admission==h),]
+
+na_stats <- data1 %>% 
+  select(- c(days_since_admission,patient_num,te,severity)) %>% 
+  is.na() %>% 
+  `!` 
+
+
+for (i in 1:ncol(na_stats)){
+  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+}
+
+sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+  }
+}
+
+rownames(sim_mat) <- colnames(na_stats)
+colnames(sim_mat) <- colnames(na_stats)
+
+mat_list[[h+1]] = sim_mat
+
+}
+
+#Add correlation values to a dataframe if a lab combination is interesting
+
+df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+final_names = c()
+names1 = list()
+names2 = list()
+names3 = list()
+names4 = list()
+names5 = list()
+names1[[1]] = c("Fibrinogen","PT")
+names2[[1]] = c("Creatinine","AST")
+names2[[2]] = c("Creatinine","ALT")
+names2[[3]] = c("Creatinine","Bilirubin")
+names3[[1]] = c("PT","AST")
+names3[[2]] = c("PT","ALT")
+names3[[3]] = c("PT","Bilirubin")
+names4[[1]] = c("Ferritin","LDH")
+names5[[1]] = c("Leukocytes","AST")
+names5[[2]] = c("Leukocytes","ALT")
+names5[[3]] = c("Leukocytes","Bilirubin")
+
+
+
+lab_temporal = function(name_group) {
+#name_group = names1
+
+count = 0
+for (i in 1:length(name_group)){
+    name <- name_group[[i]]
+    name_comb <- do.call(paste, c(as.list(name), sep = ", "))
+  
+    test_vec = c()
+    indices = c()
+    ct = 0
+    for (h in 1:length(mat_list)){
+      if (!(is.na(mat_list[[h]][match(name[1],colnames(mat_list[[1]])),match(name[2],colnames(mat_list[[1]]))]))) {
+        ct = ct+1
+        test_vec[ct] = mat_list[[h]][match(name[1],colnames(mat_list[[1]])),match(name[2],colnames(mat_list[[1]]))]
+        indices[ct] = h
+      }else{
+        ct = ct + 1
+        test_vec[ct] = test_vec[ct-1]
+        indices[ct] = h
+      }
+    }
+      count = count+1
+      final_names[count] = name_comb
+      df[,count] = test_vec
+      df_ind[,count] = indices
+    }
+
+
+  
+
+
+colnames(df) <- final_names
+
+results <- list()
+results[[1]] <- df
+results[[2]] <- mat_list
+
+
+#Analyze spearman correlations over time for lab combinations that passed the threshold.
+
+if ((ncol(df))  == 3){
+  par(mfrow=c(ncol(df),1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+}
+
+  
+if (ncol(df) == 1) {
+  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="Days since admission",ylab="Spearman Correlation")
+  title(colnames(df)[i],line=.5,cex.main=1.1)
+  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
+} 
+
+if (ncol(df) != 1) {
+for (i in 1:ncol(df)){
+  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="",ylab="")
+  title(colnames(df)[i],line=.5,cex.main=1.1)
+  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+}
+
+return(df)
+
+}
+
+
+
+lab_temporal(names1)
+lab_temporal(names2)
+lab_temporal(names3)
+lab_temporal(names4)
+lab_temporal(names5)
+
+df1 = lab_temporal(names1)
+df2 = lab_temporal(names2)
+df3 = lab_temporal(names3)
+df4 = lab_temporal(names4)
+df5 = lab_temporal(names5)
+
+interesting_temporal_penn = cbind(df1,df2,df3,df4,df5)
+
+
+```
+
+```{r}
+
+
+
+#Calculate proportion of existing lab values in binned days since admission (by 50 days) up to 300 days. Stratify by severe vs. non-severe.
+
+#temporal = function(data,bins) {
+binby = 50
+
+wide =  patient_obs_wide %>% 
+    filter(days_since_admission <= 300,
+           days_since_admission >= 0)
+
+wide = wide[c("patient_num","days_since_admission","Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine","severity")]
+
+total_days = max(wide$days_since_admission)
+df <- data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days/binby)) {
+    dat = wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct+binby
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_severe = data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days/binby)) {
+    dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct+binby
+    dat = dat[which(dat$severity=='severe'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df_severe[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_nonsevere = data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days/binby)) {
+    dat = dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct + binby
+    dat = dat[which(dat$severity=='nonsevere'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df_nonsevere[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+
+df2 <- data.frame(matrix(ncol=0,nrow=nrow(df)*ncol(df)*3))
+
+count = 0
+for (i in 1:length(lab_names)){
+    df2[(1+count):(3*nrow(df)+count),1] = rep(colnames(dat)[i],3*nrow(df))
+    count = count+3*nrow(df)
+}
+
+bin1 = "0-50"
+bin2 = "51-100"
+bin3 = "101-150"
+bin4 = "151-200"
+bin5 = "201-250"
+bin6 = "251-300"
+
+
+
+bins = c(bin1,bin2,bin3,bin4,bin5,bin6)
+
+
+df2[,2] = rep(c(bins,bins,bins),ncol(df))
+
+c1 = rep("All patients", nrow(df))
+c2 = rep("Severe patients",nrow(df))
+c3 = rep("Non-severe patients",nrow(df))
+
+ctotal = c(c1,c2,c3)
+df2[,3] = rep(ctotal,ncol(df))
+
+
+ct = 0
+for (i in 1:ncol(df)){
+    df2[(ct+1):(nrow(df)+ct),4] = df[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_severe[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_nonsevere[,i]
+    ct= ct + nrow(df)
+}
+
+colnames(df2) = c("lab","days_since_admission","name","proportion")
+
+
+df2$days_since_admission = factor(df2$days_since_admission,levels = bins)
+
+level_order = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
+
+longhaul_comb_plot = df2 %>%
+    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab,level_order))) +
+    geom_tile(colour = "white", size = 0.2) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_gradient(low = "darkblue", high = "lightgrey") +
+    facet_wrap(~name, nrow = 1) +
+    labs(
+      title = "Proportion of missing lab values over time",
+        x = "Binned days since admission",
+        y = NULL, fill = "Prop Missing"
+    ) +
+    
+    theme(
+        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
+        panel.grid.major = element_blank(),
+        legend.position = c(1.078, 0.5),
+        legend.key.height = unit(1,'cm'),
+        legend.key.width=unit(.4,'cm'),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5,size=6),
+        axis.ticks.y = element_blank()
+    )
+
+longhaul_comb_plot
+
+longhaul_comb_penn = df2
+
+df2_all = df2[df2$name=="All patients",] %>%
+  select(-c(name))
+
+longhaul_plot = df2_all %>%
+    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab,level=level_order))) +
+    geom_tile(colour = "white", size = 0.2) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_gradient(low = "darkblue", high = "lightgrey") +
+    labs(
+      title = "Proportion of missing lab values over time",
+        x = "Binned days since admission",
+        y = NULL, fill = "Prop missing"
+    ) +
+    
+    theme(
+        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
+        panel.grid.major = element_blank(),
+        legend.position = c(1.078, 0.5),
+        legend.key.height = unit(1,'cm'),
+        legend.key.width=unit(.4,'cm'),
+        axis.text.x = element_text(angle = 0, hjust = 1, vjust = 0.5,size=9),
+        axis.ticks.y = element_blank()
+    )
+
+longhaul_plot
+
+longhaul_penn = df2_all
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Calculate proportion of existing lab values in days since admission up to 20 days. Stratify by severe vs. non-severe.
+binby = 1
+
+wide =  patient_obs_wide %>% 
+    filter(days_since_admission <= 20,
+           days_since_admission >= 0)
+
+total_days = max(wide$days_since_admission)
+df <- data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days)) {
+    dat = wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct+binby
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_severe = data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days/binby)) {
+    dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct+binby
+    dat = dat[which(dat$severity=='severe'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df_severe[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_nonsevere = data.frame(matrix(ncol=0,nrow=total_days/binby))
+
+ct = 0
+for (i in 1:(total_days/binby)) {
+    dat = dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (binby+1+ct)),]
+    ct = ct + binby
+    dat = dat[which(dat$severity=='nonsevere'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df_nonsevere[i,j] = (sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+
+df2 <- data.frame(matrix(ncol=0,nrow=nrow(df)*ncol(df)*3))
+
+count = 0
+for (i in 1:length(lab_names)){
+    df2[(1+count):(3*nrow(df)+count),1] = rep(colnames(dat)[i],3*nrow(df))
+    count = count+3*nrow(df)
+}
+
+
+days = seq(1,20,1)
+df2[,2] = rep(c(days,days,days),ncol(df))
+
+c1 = rep("All patients", nrow(df))
+c2 = rep("Severe patients",nrow(df))
+c3 = rep("Non-severe patients",nrow(df))
+
+ctotal = c(c1,c2,c3)
+df2[,3] = rep(ctotal,ncol(df))
+
+
+ct = 0
+for (i in 1:ncol(df)){
+    df2[(ct+1):(nrow(df)+ct),4] = df[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_severe[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_nonsevere[,i]
+    ct= ct + nrow(df)
+}
+
+
+colnames(df2) = c("lab","days_since_admission","name","proportion")
+df2$days_since_admission = factor(df2$days_since_admission,levels = bins)
+
+
+level_order = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
+
+days = seq(1,20,1)
+df2[,2] = rep(c(days,days,days),ncol(df))
+
+shorthaul_comb_penn = df2
+
+shorthaul_comb_plot = df2 %>%
+    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab, level_order))) +
+    geom_tile(colour = "white", size = 0.2) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_gradient(low = "darkblue", high = "lightgrey") +
+    facet_wrap(~name, nrow = 1) +
+    labs(title = "Proportion of missing lab values over time",
+        x = "Binned days since admission",
+        y = NULL, fill = "Prop missing"
+    ) +
+    
+    theme(
+        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
+        panel.grid.major = element_blank(),
+        legend.position = c(1.078, 0.5),
+        legend.key.height = unit(1,'cm'),
+        legend.key.width=unit(.4,'cm'),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5,size=6),
+        axis.ticks.y = element_blank()
+    )
+
+shorthaul_comb_plot
+
+df2_all = df2[df2$name=="All patients",] %>%
+  select(-c(name))
+
+shorthaul_penn = df2_all
+
+shorthaul_plot = df2_all %>%
+    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab, level_order))) +
+    geom_tile(colour = "white", size = 0.2) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_gradient(low = "darkblue", high = "lightgrey") +
+    labs(
+      title = "Proportion of missing lab values over time",
+        x = "Binned days since admission",
+        y = NULL, fill = "Missing"
+    ) +
+    
+    theme(
+        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
+        panel.grid.major = element_blank(),
+        legend.position = c(1.078, 0.5),
+        legend.key.height = unit(1,'cm'),
+        legend.key.width=unit(.4,'cm'),
+        axis.text.x = element_text(angle = 0, hjust = 1, vjust = 0.5,size=9),
+        axis.ticks.y = element_blank()
+    )
+
+shorthaul_plot 
+
+```
+
+```{r}
+
+#Calculate proportion of existing lab values in binned days since admission (by 20 days) up to 300 days. Stratify by TE vs. non TE
+
+
+wide <- patient_obs_wide %>% 
+  filter(days_since_admission < 320,
+         days_since_admission >= 0) %>% 
+  mutate(te = patient_num %in% unique(te_patients$patient_num))
+
+total_days = max(wide$days_since_admission)
+df <- data.frame(matrix(ncol=0,nrow=total_days/20))
+
+ct = 0
+for (i in 1:(total_days/20)) {
+    dat = wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
+    ct = ct+20
+    dat = select(dat,-c(days_since_admission,patient_num,severity))
+    for (j in 1:length(lab_names)){
+        df[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_TE = data.frame(matrix(ncol=0,nrow=total_days/20))
+
+ct = 0
+for (i in 1:(total_days/20)) {
+    dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
+    ct = ct+20
+    dat = dat[which(dat$te=='TRUE'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity,te))
+    for (j in 1:length(lab_names)){
+        df_TE[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+df_nonTE = data.frame(matrix(ncol=0,nrow=total_days/20))
+
+ct = 0
+for (i in 1:(total_days/20)) {
+    dat = dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
+    ct = ct + 20
+    dat = dat[which(dat$te=='FALSE'),]
+    dat = select(dat,-c(days_since_admission,patient_num,severity,te))
+    for (j in 1:length(lab_names)){
+        df_nonTE[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
+    }
+}
+
+
+df2 <- data.frame(matrix(ncol=0,nrow=nrow(df)*ncol(df)*3))
+
+count = 0
+for (i in 1:length(lab_names)){
+    df2[(1+count):(3*nrow(df)+count),1] = rep(colnames(dat)[i],3*nrow(df))
+    count = count+3*nrow(df)
+}
+
+bin1 = "0-20"
+bin2 = "21-40"
+bin3 = "41-60"
+bin4 = "61-80"
+bin5 = "81-100"
+bin6 = "101-120"
+bin7 = "121-140"
+bin8 = "141-160"
+bin9 = "161-180"
+bin10 = "181-200"
+bin11 = "201-220"
+bin12 = "221-240"
+bin13 = "241-260"
+bin14 = "261-280"
+bin15 = "281-300"
+
+
+bins = c(bin1,bin2,bin3,bin4,bin5,bin6,bin7,bin8,bin9,bin10,bin11,bin12,bin13,bin14,bin15)
+
+
+
+df2[,2] = rep(c(bins,bins,bins),ncol(df))
+
+c1 = rep("All patients", nrow(df))
+c2 = rep("TE patients",nrow(df))
+c3 = rep("Non-TE patients",nrow(df))
+
+ctotal = c(c1,c2,c3)
+df2[,3] = rep(ctotal,ncol(df))
+
+
+ct = 0
+for (i in 1:ncol(df)){
+    df2[(ct+1):(nrow(df)+ct),4] = df[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_TE[,i]
+    ct = ct + nrow(df)
+    df2[(ct+1):(nrow(df)+ct),4] = df_nonTE[,i]
+    ct= ct + nrow(df)
+}
+
+colnames(df2) = c("lab","days_since_admission","name","proportion")
+df2$days_since_admission = factor(df2$days_since_admission,levels = bins)
+
+
+binby20_penn = df2
+binby20_plot = df2 %>%
+    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab,level_order))) +
+    geom_tile(colour = "white", size = 0.2) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_gradient(low = "lightgrey", high = "darkblue") +
+    facet_wrap(~name, nrow = 1) +
+    labs(
+        x = "Proportion of existing lab values in binned days since admission",
+        y = NULL, fill = "Prop Existing"
+    ) +
+    
+    theme(
+        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
+        panel.grid.major = element_blank(),
+        legend.position = c(1.078, 0.5),
+        legend.key.height = unit(1,'cm'),
+        legend.key.width=unit(.4,'cm'),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5,size=6),
+        axis.ticks.y = element_blank()
+    )
+
+binby20_plot
+```
+
 
 
 ```{r}
@@ -584,7 +2061,8 @@ per_lab %>%
 
 
 ```{r fig.width=12}
-per_lab %>%
+
+bin_nobs = per_lab %>%
   mutate(obs_bin = cut(n_obs, breaks = c(0:15, 20, 30, max(n_obs)))) %>%
   group_by(lab, obs_bin) %>%
   summarise(
@@ -599,8 +2077,8 @@ per_lab %>%
     "Compared to all patients" = "prop_both",
     "Compared to all severe patients" = "prop_severe",
     "Compared to all non-severe patients" = "prop_nonsevere"
-  )) %>%
-  ggplot(aes(x = obs_bin, fill = value, y = fct_reorder(lab, value))) +
+  ))
+binnobs_plot = bin_nobs %>% ggplot(aes(x = obs_bin, fill = value, y = fct_reorder(lab, value))) +
   geom_tile(colour = "white", size = 0.2) +
   geom_text(aes(label = round(value, 2)), colour = "white", size = 2) +
   scale_y_discrete(expand = c(0, 0)) +
@@ -619,6 +2097,10 @@ per_lab %>%
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
     axis.ticks.y = element_blank()
   )
+
+bin_nobs_penn = bin_nobs
+binnobs_plot
+
 ```
 
 Denominator: total number of patients, total number of non-severe patients,
@@ -657,7 +2139,23 @@ sessionInfo()
 ```
 
 ```{r}
-save(penn_na_df, penn_patient_lab, penn_agg_n_values, penn_agg_max_day, 
-  file = "results/penn-results.Rdata"
+save(penn_na_df, penn_patient_lab, penn_agg_n_values, penn_agg_max_day,df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,df_prop_Race_penn,df_prop_Age_penn,te_labs_penn,highcorr_temporal_penn,interesting_temporal_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,binby20_penn,bin_nobs_penn,
+  file = "results/penn-results-quantify-missingness.Rdata"
 )
+
+ggsave('figs/prop_plot_penn.png', prop_plot)
+ggsave('figs/num_plot_penn.png',num_plot)
+ggsave('figs/prop_plot_Sex_penn.png',prop_plot_Sex)
+ggsave('figs/prop_plot_Severity_penn.png',prop_plot_Severity)
+ggsave('figs/vis_miss_penn.png',vis_miss_penn)
+ggsave('figs/longhaul_comb_plot_penn.png',longhaul_comb_plot)
+ggsave('figs/longhaul_plot_penn.png',longhaul_plot)
+ggsave('figs/shorthaul_comb_plot_penn.png',shorthaul_comb_plot)
+ggsave('figs/shorthaul_plot_penn.png',shorthaul_plot)
+ggsave('figs/binby20_plot_penn.png',binby20_plot)
+ggsave('figs/binnobs_plot_penn.png',binnobs_plot)
+ggsave('figs/prop_plot_diff_sex_penn.png',prop_plot_diff_sex_penn)
+ggsave('figs/prop_plot_diff_severity_penn.png',prop_plot_diff_severity_penn)
+
+
 ```

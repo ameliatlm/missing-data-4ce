@@ -34,7 +34,6 @@ theme_update(
 #Read in local patient summary: Change data_dir to the folder where your data files are located
 
 data_dir <- "../4ce/Input/"
-data_dir <- "/users/emily/Downloads"
 demo_raw <-
   readr::read_csv(
     file.path(data_dir, "LocalPatientSummary.csv"),

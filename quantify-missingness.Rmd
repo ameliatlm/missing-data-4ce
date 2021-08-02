@@ -34,7 +34,6 @@ theme_update(
 #Read in local patient summary: Change data_dir to the folder where your data files are located
 
 data_dir <- "../4ce/Input/"
-data_dir <- "/users/emily/Downloads"
 demo_raw <-
   readr::read_csv(
     file.path(data_dir, "LocalPatientSummary.csv"),
@@ -950,6 +949,9 @@ vis_miss_penn
 #type corresponds to patient type (options are all patients ("All"), TE patients ("TE"), non-TE patients ("non-TE")). Automatically set to all patients. 
 #label is how the graph should be labeled according to patient type. Automatically set to "All Patients". 
 
+demo_raw$date_diff <- as.Date(as.character(demo_raw$last_discharge_date), format="%Y-%m-%d")-
+                  as.Date(as.character(demo_raw$admission_date), format="%Y-%m-%d")
+
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
   filter(days_since_admission >= 0, !is.na(short_name)) %>%
@@ -964,6 +966,13 @@ patient_obs_wide <- patient_obs %>%
   mutate(severity = factor(severe) %>%
     fct_recode("severe" = "1", "nonsevere" = "0")) %>%
   select(-severe)
+
+dates_diff = c()
+for (i in 1:nrow(demo_raw)){
+  dates_diff = c(dates_diff,rep(demo_raw$date_diff[i],sum(patient_obs_wide$patient_num==i)))
+}
+
+patient_obs_wide = patient_obs_wide[patient_obs_wide$days_since_admission <= dates_diff,]
 
 dat = patient_obs_wide
 min_corr = 0.5
@@ -1270,10 +1279,10 @@ interesting_temporal_penn = cbind(df1,df2,df3,df4,df5)
 #Calculate proportion of existing lab values in binned days since admission (by 50 days) up to 300 days. Stratify by severe vs. non-severe.
 
 #temporal = function(data,bins) {
-binby = 50
+binby = 30
 
 wide =  patient_obs_wide %>% 
-    filter(days_since_admission <= 300,
+    filter(days_since_admission <= 210,
            days_since_admission >= 0)
 
 wide = wide[c("patient_num","days_since_admission","Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine","severity")]
@@ -1326,12 +1335,13 @@ for (i in 1:length(lab_names)){
     count = count+3*nrow(df)
 }
 
-bin1 = "0-50"
-bin2 = "51-100"
-bin3 = "101-150"
-bin4 = "151-200"
-bin5 = "201-250"
-bin6 = "251-300"
+bin1 = "0-30"
+bin2 = "31-60"
+bin3 = "61-90"
+bin4 = "91-120"
+bin5 = "121-150"
+bin6 = "151-180"
+bin7 = "181-210"
 
 
 
@@ -1571,134 +1581,6 @@ shorthaul_plot = df2_all %>%
 
 shorthaul_plot 
 
-```
-
-```{r}
-
-#Calculate proportion of existing lab values in binned days since admission (by 20 days) up to 300 days. Stratify by TE vs. non TE
-
-
-wide <- patient_obs_wide %>% 
-  filter(days_since_admission < 320,
-         days_since_admission >= 0) %>% 
-  mutate(te = patient_num %in% unique(te_patients$patient_num))
-
-total_days = max(wide$days_since_admission)
-df <- data.frame(matrix(ncol=0,nrow=total_days/20))
-
-ct = 0
-for (i in 1:(total_days/20)) {
-    dat = wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
-    ct = ct+20
-    dat = select(dat,-c(days_since_admission,patient_num,severity))
-    for (j in 1:length(lab_names)){
-        df[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
-    }
-}
-
-df_TE = data.frame(matrix(ncol=0,nrow=total_days/20))
-
-ct = 0
-for (i in 1:(total_days/20)) {
-    dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
-    ct = ct+20
-    dat = dat[which(dat$te=='TRUE'),]
-    dat = select(dat,-c(days_since_admission,patient_num,severity,te))
-    for (j in 1:length(lab_names)){
-        df_TE[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
-    }
-}
-
-df_nonTE = data.frame(matrix(ncol=0,nrow=total_days/20))
-
-ct = 0
-for (i in 1:(total_days/20)) {
-    dat = dat =wide[which(wide$days_since_admission >= (ct+1) & wide$days_since_admission <= (20+1+ct)),]
-    ct = ct + 20
-    dat = dat[which(dat$te=='FALSE'),]
-    dat = select(dat,-c(days_since_admission,patient_num,severity,te))
-    for (j in 1:length(lab_names)){
-        df_nonTE[i,j] = (nrow(dat[,j])-sum(is.na(dat[,j])))/nrow(dat[,j])
-    }
-}
-
-
-df2 <- data.frame(matrix(ncol=0,nrow=nrow(df)*ncol(df)*3))
-
-count = 0
-for (i in 1:length(lab_names)){
-    df2[(1+count):(3*nrow(df)+count),1] = rep(colnames(dat)[i],3*nrow(df))
-    count = count+3*nrow(df)
-}
-
-bin1 = "0-20"
-bin2 = "21-40"
-bin3 = "41-60"
-bin4 = "61-80"
-bin5 = "81-100"
-bin6 = "101-120"
-bin7 = "121-140"
-bin8 = "141-160"
-bin9 = "161-180"
-bin10 = "181-200"
-bin11 = "201-220"
-bin12 = "221-240"
-bin13 = "241-260"
-bin14 = "261-280"
-bin15 = "281-300"
-
-
-bins = c(bin1,bin2,bin3,bin4,bin5,bin6,bin7,bin8,bin9,bin10,bin11,bin12,bin13,bin14,bin15)
-
-
-
-df2[,2] = rep(c(bins,bins,bins),ncol(df))
-
-c1 = rep("All patients", nrow(df))
-c2 = rep("TE patients",nrow(df))
-c3 = rep("Non-TE patients",nrow(df))
-
-ctotal = c(c1,c2,c3)
-df2[,3] = rep(ctotal,ncol(df))
-
-
-ct = 0
-for (i in 1:ncol(df)){
-    df2[(ct+1):(nrow(df)+ct),4] = df[,i]
-    ct = ct + nrow(df)
-    df2[(ct+1):(nrow(df)+ct),4] = df_TE[,i]
-    ct = ct + nrow(df)
-    df2[(ct+1):(nrow(df)+ct),4] = df_nonTE[,i]
-    ct= ct + nrow(df)
-}
-
-colnames(df2) = c("lab","days_since_admission","name","proportion")
-df2$days_since_admission = factor(df2$days_since_admission,levels = bins)
-
-
-binby20_penn = df2
-binby20_plot = df2 %>%
-    ggplot(aes(x = days_since_admission, fill = proportion, y = factor(lab,level_order))) +
-    geom_tile(colour = "white", size = 0.2) +
-    scale_y_discrete(expand = c(0, 0)) +
-    scale_fill_gradient(low = "lightgrey", high = "darkblue") +
-    facet_wrap(~name, nrow = 1) +
-    labs(
-        x = "Proportion of existing lab values in binned days since admission",
-        y = NULL, fill = "Prop Existing"
-    ) +
-    
-    theme(
-        plot.margin=unit(c(1.02,1.6,1,0),"cm"),
-        panel.grid.major = element_blank(),
-        legend.position = c(1.078, 0.5),
-        legend.key.height = unit(1,'cm'),
-        legend.key.width=unit(.4,'cm'),
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5,size=6),
-        axis.ticks.y = element_blank()
-    )
-
-binby20_plot
 ```
 
 

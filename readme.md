@@ -8,7 +8,7 @@ This repository performs missing data analysis on data at different sites and re
 
 - [quant-te.Rmd](quant-te.Rmd) quantifies the incidence prevalence of thrombotic events (with time)
 - [quantify-missingness.Rmd](quantify-missingness.Rmd) uses the {naniar} package to quickly generate figures of missing data information (avg proportion missing, demographic stratification, temporal analyses).
-- [predict-te.Rmd](predict-te.Rmd) performs LDA on matrix of number of valid lab values for each patient for the first 10 days of hospitalization and identifies correlation between each topic's value with the outcome (TE, AKI, Severity).
+- [predict-te.Rmd](predict-te.Rmd) performs LDA on matrix of number of valid lab values for each patient for the first 10 days of hospitalization and identifies correlation between each topic's value with the outcome (TE, AKI, Severity, Neuro).
 - [combine-sites.Rmd](combine-sites.Rmd) is an older script that compares early missingness descriptive statistics from different sites.
 - [table-one.Rmd](table-one.Rmd) will likely be used for descriptive papers for generating Table 1 of demographic statistics of patients with and without thrombotic events.
 

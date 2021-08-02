@@ -75,6 +75,13 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
   pull(truncated_code) %>%
   unique()
 
+
+#Generate list of neuro codes (obtained from neuro group)
+
+neuro_codes <- c("R41","R27","R42","G44","G03","G04","G72","M60","G61","G65","R43","G93","F29","G40","G45","G46","I60","I61","I62","I67","H54")
+
+
+
 ```
 ```{r}
 
@@ -242,9 +249,16 @@ thrombo_patients <- patient_obs %>%
   distinct()
 
 
+neuro_patients <- patient_obs %>%
+  filter(
+    concept_type == "DIAG-ICD10",
+    concept_code %in% neuro_codes,
+    days_since_admission >= 0
+  ) %>%
+  select(-days_since_admission) %>%
+  distinct()
 
-
-AKI_patients <- patient_obs[patient_obs$patient_num %in% as.integer(unique(labs_aki_summ$patient_num)),]
+AKI_patients <- patient_obs[patient_obs$patient_num %in% as.integer(unique(labs_aki_summ$patient_num)),] 
 
 #Isolate information for unique patients. Sum individual patients with thrombotic events. 
 
@@ -264,6 +278,14 @@ demo_df <- demo_df %>%
   )
 demo_df$AKI %>% sum()
 
+demo_df <- demo_df %>%
+  mutate(
+    Neuro = patient_num %in% unique(neuro_patients$patient_num),
+    deceased = deceased == 1,
+    severe = severe == 1
+  )
+demo_df$Neuro %>% sum()
+
 #Generate a table that contains information about each lab for each individual patient. Each observation is identified by their patient number and days since admission, and each lab name and value is included. If there is more than one lab value for that identifier, they are averaged.
 
 patient_obs_wide <- patient_obs %>%
@@ -279,6 +301,7 @@ patient_obs_wide <- patient_obs %>%
 outcome <- "TE"
 outcome2 <- "AKI"
 outcome3 <- "Severe"
+outcome4 <- "Neuro"
 # outcome <- "deceased"
 ```
 
@@ -318,7 +341,6 @@ lab_names <-
 #Remove patients that have no lab values
 
 missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>%
-  # mutate(outcome = as.factor(outcome)) %>%
   mutate(sum_labs = rowSums(across(all_of(lab_names)))) %>% 
   filter(sum_labs > 0)
 
@@ -459,12 +481,12 @@ theta <- stmfit$theta
 TE_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE)))
 
 
-AKI_results_penn <- theta <- stmfit$theta
-lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$AKI)))
+AKI_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$AKI)))
 
 
-Severity_results_penn <- theta <- stmfit$theta
-lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe)))
+Severity_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe)))
+
+Neuro_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro)))
 
 ```
 
@@ -519,6 +541,19 @@ Severity_boxplot_penn <- topic_df %>%
 
 Severity_boxplot_penn
 
+#Neuro
+
+topic_df <- data.frame(theta, Neuro = missing_by_patient$Neuro) %>% 
+  pivot_longer(- Neuro, names_to = 'topic') %>% 
+  mutate(topic = gsub('X', 'Topic ', topic))
+
+Neuro_boxplot_penn <- topic_df %>% 
+  ggplot(aes(x = Neuro, y = value)) +
+  geom_boxplot(alpha = 0.2) +
+  facet_wrap(~ topic, scales = 'free') +
+  NULL
+
+Neuro_boxplot_penn
 
 ```
 
@@ -529,7 +564,7 @@ Run All (not Knit).
 Please share a screenshot of the result if possible!
 You may have to install the tm package with `install.packages('tm')`.
 ```{r}
-save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,AKI_results_penn,Severity_results_penn,
+save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,AKI_results_penn,Severity_results_penn,Neuro_results_penn,
   file = "results/penn-results-predict-te.Rdata"
 )
 
@@ -537,6 +572,8 @@ ggsave('figs/topic_diagnostics_plot_penn.png', topic_diagnostics_plot)
 ggsave('figs/TE_boxplot_penn.png', TE_boxplot_penn)
 ggsave('figs/AKI_boxplot_penn.png', AKI_boxplot_penn)
 ggsave('figs/Severity_boxplot_penn.png', Severity_boxplot_penn)
+ggsave('figs/Neuro_boxplot_penn.png', Neuro_boxplot_penn)
+
 
 
 

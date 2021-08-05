@@ -256,9 +256,6 @@ patient_obs_wide <- patient_obs %>%
 lab_names <- intersect(lab_bounds$short_name, names(patient_obs_wide))
 
 
-
-mutate(te = patient_num %in% unique(te_patients$patient_num)) 
-
 Severe_pats <- demo_raw[demo_raw$severe == 1,]
 wide <- patient_obs_wide %>% mutate(severe = patient_num %in% unique(Severe_pats$patient_num)) 
 Severe_patients <- wide[wide$severe==1,]

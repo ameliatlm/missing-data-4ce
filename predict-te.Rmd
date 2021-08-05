@@ -21,6 +21,9 @@ library(mSTEM)
 ```
 
 ```{r warning=FALSE, message=FALSE}
+
+#replace my_dir with the directory that contains your files
+
 my_dir <- "../4ce/Input"
 
 theme_set(theme_bw() +

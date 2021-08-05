@@ -257,7 +257,14 @@ lab_names <- intersect(lab_bounds$short_name, names(patient_obs_wide))
 
 
 
-Severe_patients <- patient_obs_wide[patient_obs_wide$severity == "severe",]
+mutate(te = patient_num %in% unique(te_patients$patient_num)) 
+
+Severe_pats <- demo_raw[demo_raw$severe == 1,]
+wide <- patient_obs_wide %>% mutate(severe = patient_num %in% unique(Severe_pats$patient_num)) 
+Severe_patients <- wide[wide$severe==1,]
+Nonsevere_patients <- wide[wide$severe==0,]
+
+
 ```
 
 
@@ -394,6 +401,7 @@ df_prop_diff_sex$Labs <- factor(df_prop_diff_sex$Labs,levels = c("Fibrinogen","T
 df_prop_Sex = rbind(df_prop_M,df_prop_F)
 site = rep("Penn",nrow(df_prop_Sex))
 df_prop_Sex$Site = site
+df_prop_Sex_penn <- df_prop_Sex
 
 prop_plot_Sex = ggplot(data = df_prop_Sex,
        aes(x = Labs,
@@ -839,7 +847,7 @@ if ((ncol(df))  == 3){
 
   
 if (ncol(df) == 1) {
-  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="Days since admission",ylab="Spearman Correlation")
+  plot(df_ind[,1],df[,1],pch=NA,ylim=c(0,1),xlab="Days since admission",ylab="Spearman Correlation")
   title(colnames(df)[i],line=.5,cex.main=1.1)
   lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
 } 
@@ -854,7 +862,7 @@ mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
 mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
 }
 
-return(df)
+return(c(df,df_ind,final_names))
 
 }
 
@@ -866,13 +874,248 @@ lab_temporal(names3)
 lab_temporal(names4)
 lab_temporal(names5)
 
-df1 = lab_temporal(names1)
-df2 = lab_temporal(names2)
-df3 = lab_temporal(names3)
-df4 = lab_temporal(names4)
-df5 = lab_temporal(names5)
+df1 = lab_temporal(names1)[1]
+df2 = lab_temporal(names2)[1]
+df3 = lab_temporal(names3)[1]
+df4 = lab_temporal(names4)[1]
+df5 = lab_temporal(names5)[1]
+
+final_names1 = lab_temporal(names1)[3]
+final_names2 = c(lab_temporal(names2)[7],lab_temporal(names2)[8],lab_temporal(names2)[9])
+final_names3 = c(lab_temporal(names3)[7],lab_temporal(names3)[8],lab_temporal(names3)[9])
+final_names4 = lab_temporal(names4)[3]
+final_names5 = c(lab_temporal(names5)[7],lab_temporal(names5)[8],lab_temporal(names5)[9])
 
 interesting_temporal_penn = cbind(df1,df2,df3,df4,df5)
+
+#compare between severe vs. non-severe
+
+te_labs2 <- Severe_patients %>% 
+  filter(days_since_admission < 100,
+         days_since_admission >= 0) %>% 
+  mutate(te = patient_num %in% unique(te_patients$patient_num))
+
+#Calculate correlation matrices between lab missing indicators for each time point
+
+sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
+mat_list = list()
+
+for (h in 0:max(te_labs2$days_since_admission)){
+
+data1 = te_labs2[which(te_labs2$days_since_admission==h),]
+
+na_stats <- data1 %>% 
+  select(- c(days_since_admission,patient_num,te,severity)) %>% 
+  is.na() %>% 
+  `!` 
+
+
+for (i in 1:ncol(na_stats)){
+  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+}
+
+sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+  }
+}
+
+rownames(sim_mat) <- colnames(na_stats)
+colnames(sim_mat) <- colnames(na_stats)
+
+mat_list[[h+1]] = sim_mat
+
+}
+
+#Add correlation values to a dataframe if a lab combination is interesting
+
+df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+final_names = c()
+
+df1_s = lab_temporal(names1)[1]
+df2_s = c(lab_temporal(names2)[1],lab_temporal(names2)[2],lab_temporal(names2)[3])
+df3_s = c(lab_temporal(names3)[1],lab_temporal(names3)[2],lab_temporal(names3)[3])
+df4_s = lab_temporal(names4)[1]
+df5_s = c(lab_temporal(names5)[1],lab_temporal(names5)[2],lab_temporal(names5)[3])
+
+
+
+
+te_labs2 <- Nonsevere_patients %>% 
+  filter(days_since_admission < 100,
+         days_since_admission >= 0) %>% 
+  mutate(te = patient_num %in% unique(te_patients$patient_num))
+
+#Calculate correlation matrices between lab missing indicators for each time point
+
+sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
+mat_list = list()
+
+for (h in 0:max(te_labs2$days_since_admission)){
+
+data1 = te_labs2[which(te_labs2$days_since_admission==h),]
+
+na_stats <- data1 %>% 
+  select(- c(days_since_admission,patient_num,te,severity)) %>% 
+  is.na() %>% 
+  `!` 
+
+
+for (i in 1:ncol(na_stats)){
+  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
+}
+
+sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+  }
+}
+
+rownames(sim_mat) <- colnames(na_stats)
+colnames(sim_mat) <- colnames(na_stats)
+
+mat_list[[h+1]] = sim_mat
+
+}
+
+#Add correlation values to a dataframe if a lab combination is interesting
+
+df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+final_names = c()
+
+df1_ns = lab_temporal(names1)[1]
+df2_ns = c(lab_temporal(names2)[1],lab_temporal(names2)[2],lab_temporal(names2)[3])
+df3_ns = c(lab_temporal(names3)[1],lab_temporal(names3)[2],lab_temporal(names3)[3])
+df4_ns = lab_temporal(names4)[1]
+df5_ns = c(lab_temporal(names5)[1],lab_temporal(names5)[2],lab_temporal(names5)[3])
+
+
+#group 1
+
+par(mfrow=c(2,1),omi=c(0.5,0.7,.5,.7), plt=c(0.1,0.9,.1,0.6))
+
+indices = seq(1,length(mat_list),1)
+
+plot(indices,data.frame(df1_s)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title("Severe",line=.5,cex.main=.9,font.main=1)
+  lines(indices,data.frame(df1_s)[,1],col=rainbow(length(df1_s)))
+  
+plot(indices,data.frame(df1_ns)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title("Non-Severe",line=.5,cex.main=.9,font.main=1)
+  lines(indices,data.frame(df1_ns)[,1],col=rainbow(length(df1_ns)))
+
+mtext("Days since admission",side=1,line=1.2,outer=TRUE,cex=.9)
+mtext("Spearman Correlation",side=2,line=.6,outer=TRUE,cex=.9,las=0)
+mtext(final_names1[[1]],side=3,line=-.8,outer=TRUE,cex = 1.2,font.main=2)
+
+#group 2
+
+df = df2_s
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names2[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+
+df = df2_ns
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names2[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+
+
+#group 3
+
+df = df3_s
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names3[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+
+df = df3_ns
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names3[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+
+#group 4
+
+par(mfrow=c(2,1),omi=c(0.5,0.7,.5,.7), plt=c(0.1,0.9,.1,0.6))
+
+indices = seq(1,length(mat_list),1)
+
+plot(indices,data.frame(df4_s)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title("Severe",line=.5,cex.main=.9,font.main=1)
+  lines(indices,data.frame(df4_s)[,1],col=rainbow(length(df4_s)))
+  
+plot(indices,data.frame(df4_ns)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title("Non-Severe",line=.5,cex.main=.9,font.main=1)
+  lines(indices,data.frame(df4_ns)[,1],col=rainbow(length(df4_ns)))
+
+mtext("Days since admission",side=1,line=1.2,outer=TRUE,cex=.9)
+mtext("Spearman Correlation",side=2,line=.6,outer=TRUE,cex=.9,las=0)
+mtext(final_names4[[1]],side=3,line=-.8,outer=TRUE,cex = 1.2,font.main=2)
+
+#group 5
+
+df = df5_s
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names5[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+
+df = df5_ns
+
+par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
+
+for (i in 1:length(df)){
+  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
+  title(final_names5[i],line=.5,cex.main=1.1,font.main=1)
+  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
+}
+mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
+mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
+mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
 
 
 ```
@@ -1626,20 +1869,17 @@ sessionInfo()
 ```
 
 ```{r}
-save(penn_na_df, penn_patient_lab, penn_agg_n_values, penn_agg_max_day,df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,df_prop_Race_penn,df_prop_Age_penn,te_labs_penn,highcorr_temporal_penn,interesting_temporal_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,binby20_penn,bin_nobs_penn,
+save(penn_na_df, penn_patient_lab, penn_agg_n_values,df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,highcorr_temporal_penn,interesting_temporal_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,
   file = "results/penn-results-quantify-missingness.Rdata"
 )
 
 ggsave('figs/prop_plot_penn.png', prop_plot)
 ggsave('figs/num_plot_penn.png',num_plot)
-ggsave('figs/prop_plot_Sex_penn.png',prop_plot_Sex)
-ggsave('figs/prop_plot_Severity_penn.png',prop_plot_Severity)
 ggsave('figs/vis_miss_penn.png',vis_miss_penn)
 ggsave('figs/longhaul_comb_plot_penn.png',longhaul_comb_plot)
 ggsave('figs/longhaul_plot_penn.png',longhaul_plot)
 ggsave('figs/shorthaul_comb_plot_penn.png',shorthaul_comb_plot)
 ggsave('figs/shorthaul_plot_penn.png',shorthaul_plot)
-ggsave('figs/binby20_plot_penn.png',binby20_plot)
 ggsave('figs/binnobs_plot_penn.png',binnobs_plot)
 ggsave('figs/prop_plot_diff_sex_penn.png',prop_plot_diff_sex_penn)
 ggsave('figs/prop_plot_diff_severity_penn.png',prop_plot_diff_severity_penn)

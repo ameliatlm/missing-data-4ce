@@ -1133,6 +1133,7 @@ wide =  patient_obs_wide %>%
 wide = wide[c("patient_num","days_since_admission","Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine","severity")]
 
 total_days = max(wide$days_since_admission)
+n_bins = as.integer(total_days/binby)
 df <- data.frame(matrix(ncol=0,nrow=total_days/binby))
 
 ct = 0
@@ -1180,6 +1181,8 @@ for (i in 1:length(lab_names)){
     count = count+3*nrow(df)
 }
 
+
+
 bin1 = "0-30"
 bin2 = "31-60"
 bin3 = "61-90"
@@ -1190,8 +1193,8 @@ bin7 = "181-210"
 
 
 
-bins = c(bin1,bin2,bin3,bin4,bin5,bin6)
-
+bins = c(bin1,bin2,bin3,bin4,bin5,bin6,bin7)
+bins = bins[1:n_bins]
 
 df2[,2] = rep(c(bins,bins,bins),ncol(df))
 

@@ -34,7 +34,12 @@ theme_update(
 
 #Read in local patient summary: Change data_dir to the folder where your data files are located
 
-data_dir <- "../4ce/Input/"
+data_dir <- "/users/emily/Downloads"
+
+#Change dateFormat to the date format of your data
+
+dateFormat <- "%d-%b-%y"
+
 demo_raw <-
   readr::read_csv(
     file.path(data_dir, "LocalPatientSummary.csv"),
@@ -49,6 +54,7 @@ demo_raw <-
       last_discharge_date
     )
   )
+
 
 #Read in thrombotic icd codes. Add column "truncated code" for first three characters of each code. Extract unique truncated codes. 
 
@@ -106,6 +112,12 @@ patient_obs_wide <- patient_obs %>%
     fct_recode("severe" = "1", "nonsevere" = "0")) %>%
   select(-severe)
 
+#Specify lab ordering so that analyses are easy to consolidate across sites
+#If your site has additional labs, please add them at the end of allLabs:
+
+allLabs <- c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
+labsPresent <- allLabs[ allLabs %in% colnames(patient_obs_wide)]
+
 #Extract unique lab names
 
 lab_names <- intersect(lab_bounds$short_name, names(patient_obs_wide))
@@ -149,8 +161,8 @@ site = rep("Penn",length(dat_prop))
 df_prop = data.frame(Labs = colnames(avgs), Avg_Prop_Miss = dat_prop,sd = dat_sd_prop,Site=site)
 df_num = data.frame(Labs = colnames(avgs), Avg_Num_Miss = dat_num,sd = dat_sd_num,Site=site)
 
-df_prop$Labs <- factor(df_prop$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
-df_num$Labs <- factor(df_prop$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop$Labs <- factor(df_prop$Labs,levels = labsPresent)
+df_num$Labs <- factor(df_prop$Labs,levels = labsPresent )
 
 
 prop_plot = ggplot(data = df_prop,
@@ -242,11 +254,11 @@ diff = dat_prop_M-dat_prop_F
 sex_M = rep("Male",length(dat_prop_M))
 sex_F = rep("Female",length(dat_prop_F))
 df_prop_M = data.frame(Labs = colnames(props_M), Avg_Prop_Miss = dat_prop_M,sd = dat_sd_M,Sex=sex_M)
-df_prop_M$Labs <- factor(df_prop_M$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_M$Labs <- factor(df_prop_M$Labs,levels =labsPresent)
 df_prop_F = data.frame(Labs = colnames(props_F), Avg_Prop_Miss = dat_prop_F,sd = dat_sd_F,Sex=sex_F)
-df_prop_F$Labs <- factor(df_prop_F$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_F$Labs <- factor(df_prop_F$Labs,levels = labsPresent)
 df_prop_diff_sex = data.frame(Labs = colnames(props_F), Avg_Prop_Miss = diff)
-df_prop_diff_sex$Labs <- factor(df_prop_diff_sex$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_diff_sex$Labs <- factor(df_prop_diff_sex$Labs,levels = labsPresent)
 
 
 
@@ -335,11 +347,11 @@ diff = dat_prop_S-dat_prop_NS
 severe = rep("Severe",length(dat_prop_S))
 non_severe = rep("Non-Severe",length(dat_prop_NS))
 df_prop_S = data.frame(Labs = colnames(props_S), Avg_Prop_Miss = dat_prop_S,sd = dat_sd_prop_S,severity = severe)
-df_prop_S$Labs <- factor(df_prop_S$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_S$Labs <- factor(df_prop_S$Labs,levels =labsPresent)
 df_prop_NS = data.frame(Labs = colnames(props_NS), Avg_Prop_Miss = dat_prop_NS,sd = dat_sd_prop_NS,severity = non_severe)
-df_prop_NS$Labs <- factor(df_prop_NS$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_NS$Labs <- factor(df_prop_NS$Labs,levels = labsPresent)
 df_prop_diff_severity = data.frame(Labs = colnames(props_S), Avg_Prop_Miss = diff)
-df_prop_diff_severity$Labs <- factor(df_prop_diff_severity$Labs,levels = c("Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine"))
+df_prop_diff_severity$Labs <- factor(df_prop_diff_severity$Labs,levels = labsPresent)
 
 
 df_prop_Severity = rbind(df_prop_S,df_prop_NS)
@@ -736,6 +748,8 @@ wide =  patient_obs_wide %>%
     filter(days_since_admission <= 210,
            days_since_admission >= 0)
 
+wide = wide[c("patient_num","days_since_admission","severity", labsPresent)]
+
 wide = wide[c("patient_num","days_since_admission","Fibrinogen","Troponin_normal","Procalcitonin","FEU","Troponin_high","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine","severity")]
 
 total_days = max(wide$days_since_admission)
@@ -1037,48 +1051,6 @@ shorthaul_plot
 
 ```
 
-
-
-```{r}
-
-#Plot pattern of missingness using upset plot. Visualize number of missing values for sets of data. Uses 7 sets (7 variables) and 10 intersections (10 interactions)
-
-gg_miss_upset(te_labs, nsets = 7, nintersects = 10)
-
-#Plot number of missings for each lab, broken down by no thrombotic event vs. presence of thrombotic event(s)
-
-gg_miss_fct(x = te_labs, fct = te)
-
-#Plot number of missing lab values for each observation (patient time point)
-
-gg_miss_case(te_labs)
-
-#Plot number of missing values for each lab
-
-gg_miss_var(te_labs) +
-  theme(
-    panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank()
-  ) +
-  scale_y_continuous(expand = expansion(0, c(0, 1000))) +
-  xlab(NULL)
-
-#Plot percent of missing values for each lab
-
-gg_miss_var(te_labs, show_pct = TRUE) +
-  theme(
-    panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank()
-  ) +
-  scale_y_continuous(expand = expansion(0, c(0, 1))) +
-  xlab(NULL)
-# mcar_test(te_labs)
-
-# te_labs %>%
-#   finalfit::missing_pairs(dependent = "te",
-#                           explanatory = lab_names,
-#                           position = "fill")
-```
 
 
 ```{R}

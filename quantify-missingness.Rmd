@@ -7,7 +7,7 @@ knit: (function(inputFile, encoding) {
 ---
 ```{r setup}
 source("R/utils.R")
-required_pkgs <- c("tidyverse", "lubridate", "ggridges", "cowplot", "naniar", "DT","RColorBrewer","mSTEM")
+required_pkgs <- c("tidyverse", "lubridate", "ggridges", "cowplot", "naniar", "DT","RColorBrewer","mSTEM",'Rcpp')
 install_required(required_pkgs)
 
 library(tidyverse)
@@ -18,6 +18,7 @@ library(cowplot)
 library(ggridges)
 library(RColorBrewer)
 library(mSTEM)
+library(Rcpp)
 
 theme_set(theme_bw())
 theme_update(
@@ -84,152 +85,6 @@ lab_names <- lab_bounds$short_name
 
 # load('public-data/code.dict.rda')
 ```
-
-```{R message=FALSE}
-
-#Get AKI patients
-
-#Code from AKI Group (https://github.com/covidclinical/Phase2.1AKIRPackage)
-
-observations = patient_obs
-demographics = demo_raw
-
-demographics <- demographics %>% dplyr::mutate(patient_id=paste("Penn",patient_num,sep="_"))
-
-
-    demographics_filt <- demographics %>% dplyr::mutate(time_to_severe = ifelse(severe == 1, as.numeric(as.Date(severe_date) - as.Date(admission_date)),NA))
-    demographics_filt <- demographics_filt %>% dplyr::mutate(time_to_death = ifelse(deceased == 1, as.numeric(as.Date(death_date) - as.Date(admission_date)),NA))
-    demographics_filt <- demographics_filt %>% dplyr::mutate(length_stay = ifelse(still_in_hospital==1,days_since_admission,as.numeric(as.Date(last_discharge_date) - as.Date(admission_date))))
-    
-    # Reorder the columns to be more readable
-    demographics_filt <- demographics_filt %>% dplyr::select(patient_num,siteid,sex,age_group,race,length_stay,severe,time_to_severe,deceased,time_to_death)
-    
-
-
-diagnosis <- observations[observations$concept_type %in% c("DIAG-ICD9","DIAG-ICD10"),-6]
-    colnames(diagnosis) <- c("patient_num","siteid","days_since_admission","concept_type","icd_code")
-    
-
-procedures <- observations[observations$concept_type %in% c("PROC-ICD9", "PROC-ICD10"),-6]
-colnames(procedures) <- c("patient_num","siteid","days_since_admission","icd_version","procedure_code")
-    
-# Extract serum Cr levels
-    labs_cr_aki <- observations[observations$concept_code == '2160-0',] #LOINC code for Cr 2160-0
-    # Remove unnecessary columns
-    labs_cr_aki <- labs_cr_aki[,-c(4,5)]
-    # Filter for labs >= -90 days
-    labs_cr_aki <- labs_cr_aki %>% dplyr::filter(days_since_admission >= -90)
-    
-    # Generate separate demographics table for patients who do not have any sCr values fulfilling 
-    # the above (e.g. all the labs are before t= -90days or patient has no sCr value)
-    message("Removing patients who do not have any serum creatinine values during admission...")
-    pts_valid_cr <- labs_cr_aki %>% dplyr::filter(days_since_admission >= 0)
-    pts_valid_cr <- unique(pts_valid_cr$patient_num)
-    demog_no_cr <- demographics_filt[!(demographics_filt$patient_num %in% pts_valid_cr),]
-    demographics_filt <- demographics_filt[demographics_filt$patient_num %in% pts_valid_cr,]
-    labs_cr_aki <- labs_cr_aki[labs_cr_aki$patient_num %in% pts_valid_cr,]
-    # There are two possible scenarios which we have to consider when detecting each AKI event:
-    # (1) AKI occurs after admission
-    #   - easy to detect with the formal KDIGO definition as we only need to use older data points
-    #   - we can use an approach similar to what is used in the MIMIC-III data-set: use a rolling
-    #     time frame and detect the lowest Cr value to use as our baseline
-    # (2) Patient presents with an AKI at the time of admission 
-    #   - this makes it harder for us to determine what is the true baseline especially with limited
-    #     longitudinal data
-    #   - Hence one way to get around this is to generate a "retrospective" baseline (i.e. look into
-    #     future Cr values and find the minimum in a rolling timeframe) and use this as a surrogate
-    #     baseline
-    #   - Such a workaround is the only feasible way of dealing with missing retrospective data though
-    #     it is likely that we may miss quite a number of true AKIs using this method
-    
-    # Scenario (1): AKI occurs during admission
-    # Find minimum Cr level in a rolling 90 day timeframe
-    message("Generating minimum Cr level in the past 90 days")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-90,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_90d = RcppRoll::roll_min(value,91,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
-    # Find minimum Cr level in a rolling 2 day timeframe (48h)
-    message("Generating minimum Cr level in the past 48h")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-2,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
-    
-    # Scenario (2): Patient presents with an AKI already on board
-    # Find minimum Cr level in a rolling 7 day timeframe
-    message("Generating minimum Cr level 7 days in the future")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+7))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_retro_7day = RcppRoll::roll_min(value,8,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
-    # Find minimum Cr level in a rolling 2 day timeframe (48h)
-    message("Generating minimum Cr level 48h in the future")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+2))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h_retro = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
-    
-  
-labs_cr_aki <- data.table::setDT(labs_cr_aki)[,':='(cr_7d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+7,incbounds = TRUE)],1),cr_90d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+90,incbounds = TRUE)],1)),by=c('patient_num','days_since_admission')][]
-    
-    # At this point, our table has these headers:
-    # patient_id  siteid  days_since_admission  value min_cr_90d min_cr_48h  min_cr_retro_7day min_cr_48h_retro  cr_7d cr_90d
-    
-    # Now we have to start grading AKI severity at each time point
-    # This approach is similar to how the MIMIC-III dataset generates AKI severity
-    # Generate two columns using both the formal KDIGO AKI definition and the modified retrospective AKI definition
-    message("Generating KDIGO severity grades for each serum Cr value")
-    labs_cr_aki$aki_kdigo <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade)
-    labs_cr_aki$aki_kdigo_retro <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade_retro)
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(aki_kdigo_final = max(aki_kdigo,aki_kdigo_retro))
-    
-    # Generate two columns grading AKD severity at 7d and 90d (grade 0B/C is coded as 0.5)
-    labs_cr_aki$akd_7d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_7d)
-    labs_cr_aki$akd_90d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_90d)
-    
-    # Now we are going to generate the start days of each AKI
-    labs_cr_aki_tmp <- labs_cr_aki
-    labs_cr_aki_tmp$valid = 1
-    
-    # Find the day of the minimum Cr used for grading AKIs (taken as baseline)
-    message("Now finding the day at which the minimum serum Cr is achieved")
-    labs_cr_aki_tmp <- labs_cr_aki_tmp %>% dplyr::group_by(patient_num) %>% tidyr::complete(days_since_admission = tidyr::full_seq(days_since_admission,1)) %>% dplyr::mutate(value = zoo::na.fill(value,Inf))
-    labs_cr_aki_tmp2 <- labs_cr_aki_tmp
-    labs_cr_aki_tmp3 <- labs_cr_aki_tmp
-    labs_cr_aki_tmp2 <- labs_cr_aki_tmp2 %>% split(.$patient_num) %>% purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
-    colnames(labs_cr_aki_tmp2)[2] <- "day_min"
-    labs_cr_aki_tmp3 <- labs_cr_aki_tmp3 %>% split(.$patient_num) %>%  purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
-    colnames(labs_cr_aki_tmp3)[2] <- "day_min_retro"
-    labs_cr_aki_tmp4 <- cbind(labs_cr_aki_tmp,"day_min" = labs_cr_aki_tmp2$day_min,"day_min_retro" = labs_cr_aki_tmp3$day_min_retro)
-    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4[!is.na(labs_cr_aki_tmp4$valid),]
-    
-    # Generate delta_cr
-    message("Now identifying maxima points of serum Cr")
-    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(min_cr_7d_final = min(min_cr_90d,min_cr_retro_7day,na.rm=TRUE)) %>% dplyr::mutate(delta_cr = value - min_cr_7d_final)
-    
-    # Use the largest delta_cr to find the peak of each AKI
-    labs_cr_aki_delta_maxima <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num) %>% dplyr::filter(delta_cr %in% delta_cr[which.peaks(delta_cr,decreasing=FALSE)])
-    labs_cr_aki_delta_maxima$delta_is_max = 1
-    labs_cr_aki_delta_maxima <- labs_cr_aki_delta_maxima %>% dplyr::rename(delta_maxima = delta_cr) %>% dplyr::select(patient_num,days_since_admission,delta_maxima,delta_is_max)
-    labs_cr_aki_tmp4 <- merge(labs_cr_aki_tmp4,labs_cr_aki_delta_maxima,by=c("patient_num","days_since_admission"),all.x=TRUE)
-    
-    # Filter for KDIGO grades > 0
-    message("Now generating tables of all AKI events")
-    labs_cr_aki_tmp5 <- labs_cr_aki_tmp4[labs_cr_aki_tmp4$aki_kdigo_final > 0,]
-    labs_cr_aki_tmp5[is.na(labs_cr_aki_tmp5)] <- 0
-    # Filter for maxima of delta_cr (which should give us the peaks)
-    labs_cr_aki_tmp5 <- labs_cr_aki_tmp5[labs_cr_aki_tmp5$delta_is_max > 0,]
-    
-    # Filter and reorder columns to generate our final table of all AKI events
-    labs_aki_summ <- labs_cr_aki_tmp5 %>% dplyr::select(patient_num,siteid,days_since_admission,value,day_min,day_min_retro,min_cr_90d,min_cr_48h,min_cr_retro_7day,min_cr_48h_retro,min_cr_7d_final,cr_7d,cr_90d,delta_cr,aki_kdigo,aki_kdigo_retro,aki_kdigo_final,akd_7d,akd_90d)
-    
-    labs_aki_summ <- labs_aki_summ %>% dplyr::distinct(patient_num,days_since_admission,.keep_all=TRUE)
-    labs_aki_summ <- labs_aki_summ %>% dplyr::filter(days_since_admission >= 0)
-    
-    
-AKI_patients <- patient_obs[patient_obs$patient_num %in% as.integer(unique(labs_aki_summ$patient_num)),]
-
-       
-```   
-
-
 
 ```{R}
 # setdiff(patient_obs$concept_code %>% unique(), lab_bounds$LOINC)
@@ -525,25 +380,7 @@ prop_plot_diff_severity_penn
 
 ```
 
-```{R}
 
-#Extract observations from patient_obs_wide that have days since admission between 0 and 20 and a thrombotic event code. Remove columns for patient ID and days since admisison.
-
-te_labs <- patient_obs_wide %>%
-  filter(
-    days_since_admission <= 20,
-    days_since_admission >= 0
-  ) %>%
-  mutate(te = patient_num %in% unique(te_patients$patient_num)) %>%
-  select(-c(patient_num, days_since_admission))
-
-te_labs_penn = te_labs
-
-#Generate a ggplot of the missingness inside a dataframe. Cells are colored according to missingness (black indicates a missing cell and grey indicates a present cell). 
-
-vis_miss_penn = vis_miss(te_labs, sort_miss = TRUE)
-vis_miss_penn
-```
 
 
 
@@ -551,7 +388,7 @@ vis_miss_penn
 
 #For all patients
 
-#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. Isolate events from the first 100 days since admission. Then, for each time point, calculate the spearman correlation matrix for the missingness indicators for each lab. Generate a list of these matrices, and for each lab combination, see if at least 50% of the spearman correlations from each time point are > 0.5. 
+#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. 
 
 #dat corresponds to the patient_obs_wide variable
 #prop_greater is the desired proportion of spearman correlation values greater than the threshold
@@ -585,8 +422,8 @@ for (i in 1:nrow(demo_raw)){
 patient_obs_wide = patient_obs_wide[patient_obs_wide$days_since_admission <= dates_diff,]
 
 dat = patient_obs_wide
-min_corr = 0.5
-prop_greater = 0.3
+min_corr = 0
+prop_greater = 0
 
 te_labs2 <- dat %>% 
   filter(days_since_admission < 100,
@@ -616,7 +453,9 @@ sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
 
 for (i in 1:ncol(na_stats)){
   for (j in 1:ncol(na_stats)){
-    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    if (nrow(na_stats) >= 5) {
+      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    }
   }
 }
 
@@ -678,63 +517,16 @@ results[[1]] <- df
 results[[2]] <- mat_list
 
 
-#Generate a heat map for the Spearman correlation between lab missingness at a given time point (in this example, second time point). Legend displays the range of Spearman correlation values. 
+temporal_penn = df
 
-which_mat = 2
+#Get df for severe
 
-heatmap(results[[2]][[which_mat]],scale="none",cexRow=1,cexCol=1,margins=c(8,6))
+dat = patient_obs_wide
+dat = dat[dat$severity=='severe',]
+min_corr = 0
+prop_greater = 0
 
-legend(x="bottomright", legend=c(round(min(results[[2]][[which_mat]]),2),round(((max(results[[2]][[which_mat]])+min(results[[2]][[which_mat]]))/2),2), max(results[[2]][[which_mat]])), 
-     fill=colorRampPalette(brewer.pal(8, "Oranges"))(3))
-
-
-#Analyze spearman correlations over time for lab combinations that passed the threshold.
-
-if ((ncol(df)) > 6){
-  par(mfrow=c(ncol(df),1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-}
-
-if ((ncol(df)) <= 12 & ncol(df) > 5) {
- if (ncol(df) %% 2 != 0) {
-   par(mfrow=c((ncol(df)+1)/2,2),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
- }else{
-   par(mfrow=c(ncol(df)/2,2),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-   
- }
-}
-
-if ((ncol(df)) <= 18 & ncol(df) > 12) {
-  if (ncol(df) %% 3 == 0) {
-    par(mfrow=c((ncol(df))/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-  }
-  if ((ncol(df)+1) %% 3 == 0) {
-    par(mfrow=c((ncol(df)+1)/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-  }
-  if ((ncol(df)+2) %% 3 == 0) {
-    par(mfrow=c((ncol(df)+2)/3,3),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-  }
-}
-  
-
-for (i in 1:ncol(df)){
-  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="",ylab="")
-  title(colnames(df)[i],line=.3,cex.main=.9)
-  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
-}
-mtext("Days since admission",side=1,line=2.4,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-
-highcorr_temporal_penn = df
-
-
-
-```
-
-```{R,warning=FALSE}
-
-#Given list of interesting lab combinations, assess spearman correlation between lab missing indicators over time and plot. 
-
-te_labs2 <- patient_obs_wide %>% 
+te_labs2 <- dat %>% 
   filter(days_since_admission < 100,
          days_since_admission >= 0) %>% 
   mutate(te = patient_num %in% unique(te_patients$patient_num))
@@ -762,7 +554,9 @@ sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
 
 for (i in 1:ncol(na_stats)){
   for (j in 1:ncol(na_stats)){
-    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    if (nrow(na_stats) >= 5) {
+      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    }
   }
 }
 
@@ -773,61 +567,49 @@ mat_list[[h+1]] = sim_mat
 
 }
 
-#Add correlation values to a dataframe if a lab combination is interesting
+#Add correlation values to a dataframe if a lab combination passes the threshold
 
 df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
 df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+names = list()
 final_names = c()
-names1 = list()
-names2 = list()
-names3 = list()
-names4 = list()
-names5 = list()
-names1[[1]] = c("Fibrinogen","PT")
-names2[[1]] = c("Creatinine","AST")
-names2[[2]] = c("Creatinine","ALT")
-names2[[3]] = c("Creatinine","Bilirubin")
-names3[[1]] = c("PT","AST")
-names3[[2]] = c("PT","ALT")
-names3[[3]] = c("PT","Bilirubin")
-names4[[1]] = c("Ferritin","LDH")
-names5[[1]] = c("Leukocytes","AST")
-names5[[2]] = c("Leukocytes","ALT")
-names5[[3]] = c("Leukocytes","Bilirubin")
-
-
-
-lab_temporal = function(name_group) {
-#name_group = names1
-
 count = 0
-for (i in 1:length(name_group)){
-    name <- name_group[[i]]
-    name_comb <- do.call(paste, c(as.list(name), sep = ", "))
-  
-    test_vec = c()
-    indices = c()
-    ct = 0
-    for (h in 1:length(mat_list)){
-      if (!(is.na(mat_list[[h]][match(name[1],colnames(mat_list[[1]])),match(name[2],colnames(mat_list[[1]]))]))) {
-        ct = ct+1
-        test_vec[ct] = mat_list[[h]][match(name[1],colnames(mat_list[[1]])),match(name[2],colnames(mat_list[[1]]))]
-        indices[ct] = h
-      }else{
-        ct = ct + 1
-        test_vec[ct] = test_vec[ct-1]
-        indices[ct] = h
+
+
+
+for (i in 1:ncol(na_stats)){
+  for (j in 1:ncol(na_stats)){
+    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
+    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
+    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
+    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
+    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
+      test_vec = c()
+      indices = c()
+      ct = 0
+      for (h in 1:length(mat_list)){
+        if (!(is.na(mat_list[[h]][i,j]))) {
+          ct = ct+1
+          test_vec[ct] = mat_list[[h]][i,j]
+          indices[ct] = h
+        }else{
+          ct = ct + 1
+          test_vec[ct] = test_vec[ct-1]
+          indices[ct] = h
+        }
       }
-    }
-      count = count+1
-      final_names[count] = name_comb
-      df[,count] = test_vec
-      df_ind[,count] = indices
-    }
+      
+      if (mean(abs(test_vec) > min_corr) > prop_greater) {
+        count = count+1
+        final_names[count] = name1
+        df[,count] = test_vec
+        df_ind[,count] = indices
+      }
 
-
+    }
+    }
+}
   
-
 
 colnames(df) <- final_names
 
@@ -835,59 +617,16 @@ results <- list()
 results[[1]] <- df
 results[[2]] <- mat_list
 
+temporal_severe_penn = df
 
-#Analyze spearman correlations over time for lab combinations that passed the threshold.
+#get df for non-severe
 
-if ((ncol(df))  == 3){
-  par(mfrow=c(ncol(df),1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-}
+dat = patient_obs_wide
+dat = dat[dat$severity=='nonsevere',]
+min_corr = 0
+prop_greater = 0
 
-  
-if (ncol(df) == 1) {
-  plot(df_ind[,1],df[,1],pch=NA,ylim=c(0,1),xlab="Days since admission",ylab="Spearman Correlation")
-  title(colnames(df)[i],line=.5,cex.main=1.1)
-  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
-} 
-
-if (ncol(df) != 1) {
-for (i in 1:ncol(df)){
-  plot(df_ind[,i],df[,i],pch=NA,ylim=c(0,1),xlab="",ylab="")
-  title(colnames(df)[i],line=.5,cex.main=1.1)
-  lines(df_ind[,i],df[,i],col=rainbow(ncol(df))[i])
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-}
-
-return(c(df,df_ind,final_names))
-
-}
-
-
-
-lab_temporal(names1)
-lab_temporal(names2)
-lab_temporal(names3)
-lab_temporal(names4)
-lab_temporal(names5)
-
-df1 = lab_temporal(names1)[1]
-df2 = lab_temporal(names2)[1]
-df3 = lab_temporal(names3)[1]
-df4 = lab_temporal(names4)[1]
-df5 = lab_temporal(names5)[1]
-
-final_names1 = lab_temporal(names1)[3]
-final_names2 = c(lab_temporal(names2)[7],lab_temporal(names2)[8],lab_temporal(names2)[9])
-final_names3 = c(lab_temporal(names3)[7],lab_temporal(names3)[8],lab_temporal(names3)[9])
-final_names4 = lab_temporal(names4)[3]
-final_names5 = c(lab_temporal(names5)[7],lab_temporal(names5)[8],lab_temporal(names5)[9])
-
-interesting_temporal_penn = cbind(df1,df2,df3,df4,df5)
-
-#compare between severe vs. non-severe
-
-te_labs2 <- Severe_patients %>% 
+te_labs2 <- dat %>% 
   filter(days_since_admission < 100,
          days_since_admission >= 0) %>% 
   mutate(te = patient_num %in% unique(te_patients$patient_num))
@@ -915,7 +654,9 @@ sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
 
 for (i in 1:ncol(na_stats)){
   for (j in 1:ncol(na_stats)){
-    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    if (nrow(na_stats) >= 5) {
+      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
+    }
   }
 }
 
@@ -926,200 +667,65 @@ mat_list[[h+1]] = sim_mat
 
 }
 
-#Add correlation values to a dataframe if a lab combination is interesting
+#Add correlation values to a dataframe if a lab combination passes the threshold
 
 df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
 df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
+names = list()
 final_names = c()
-
-df1_s = lab_temporal(names1)[1]
-df2_s = c(lab_temporal(names2)[1],lab_temporal(names2)[2],lab_temporal(names2)[3])
-df3_s = c(lab_temporal(names3)[1],lab_temporal(names3)[2],lab_temporal(names3)[3])
-df4_s = lab_temporal(names4)[1]
-df5_s = c(lab_temporal(names5)[1],lab_temporal(names5)[2],lab_temporal(names5)[3])
+count = 0
 
 
-
-
-te_labs2 <- Nonsevere_patients %>% 
-  filter(days_since_admission < 100,
-         days_since_admission >= 0) %>% 
-  mutate(te = patient_num %in% unique(te_patients$patient_num))
-
-#Calculate correlation matrices between lab missing indicators for each time point
-
-sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
-mat_list = list()
-
-for (h in 0:max(te_labs2$days_since_admission)){
-
-data1 = te_labs2[which(te_labs2$days_since_admission==h),]
-
-na_stats <- data1 %>% 
-  select(- c(days_since_admission,patient_num,te,severity)) %>% 
-  is.na() %>% 
-  `!` 
-
-
-for (i in 1:ncol(na_stats)){
-  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
-}
-
-sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
 
 for (i in 1:ncol(na_stats)){
   for (j in 1:ncol(na_stats)){
-    sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
-  }
+    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
+    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
+    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
+    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
+    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
+      test_vec = c()
+      indices = c()
+      ct = 0
+      for (h in 1:length(mat_list)){
+        if (!(is.na(mat_list[[h]][i,j]))) {
+          ct = ct+1
+          test_vec[ct] = mat_list[[h]][i,j]
+          indices[ct] = h
+        }else{
+          ct = ct + 1
+          test_vec[ct] = test_vec[ct-1]
+          indices[ct] = h
+        }
+      }
+      
+      if (mean(abs(test_vec) > min_corr) > prop_greater) {
+        count = count+1
+        final_names[count] = name1
+        df[,count] = test_vec
+        df_ind[,count] = indices
+      }
+
+    }
+    }
 }
-
-rownames(sim_mat) <- colnames(na_stats)
-colnames(sim_mat) <- colnames(na_stats)
-
-mat_list[[h+1]] = sim_mat
-
-}
-
-#Add correlation values to a dataframe if a lab combination is interesting
-
-df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-final_names = c()
-
-df1_ns = lab_temporal(names1)[1]
-df2_ns = c(lab_temporal(names2)[1],lab_temporal(names2)[2],lab_temporal(names2)[3])
-df3_ns = c(lab_temporal(names3)[1],lab_temporal(names3)[2],lab_temporal(names3)[3])
-df4_ns = lab_temporal(names4)[1]
-df5_ns = c(lab_temporal(names5)[1],lab_temporal(names5)[2],lab_temporal(names5)[3])
-
-
-#group 1
-
-par(mfrow=c(2,1),omi=c(0.5,0.7,.5,.7), plt=c(0.1,0.9,.1,0.6))
-
-indices = seq(1,length(mat_list),1)
-
-plot(indices,data.frame(df1_s)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title("Severe",line=.5,cex.main=.9,font.main=1)
-  lines(indices,data.frame(df1_s)[,1],col=rainbow(length(df1_s)))
   
-plot(indices,data.frame(df1_ns)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title("Non-Severe",line=.5,cex.main=.9,font.main=1)
-  lines(indices,data.frame(df1_ns)[,1],col=rainbow(length(df1_ns)))
 
-mtext("Days since admission",side=1,line=1.2,outer=TRUE,cex=.9)
-mtext("Spearman Correlation",side=2,line=.6,outer=TRUE,cex=.9,las=0)
-mtext(final_names1[[1]],side=3,line=-.8,outer=TRUE,cex = 1.2,font.main=2)
+colnames(df) <- final_names
 
-#group 2
+results <- list()
+results[[1]] <- df
+results[[2]] <- mat_list
 
-df = df2_s
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names2[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
-
-df = df2_ns
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names2[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
+temporal_nonsevere_penn = df
 
 
-#group 3
-
-df = df3_s
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names3[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
-
-df = df3_ns
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names3[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
-
-#group 4
-
-par(mfrow=c(2,1),omi=c(0.5,0.7,.5,.7), plt=c(0.1,0.9,.1,0.6))
-
-indices = seq(1,length(mat_list),1)
-
-plot(indices,data.frame(df4_s)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title("Severe",line=.5,cex.main=.9,font.main=1)
-  lines(indices,data.frame(df4_s)[,1],col=rainbow(length(df4_s)))
-  
-plot(indices,data.frame(df4_ns)[,1],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title("Non-Severe",line=.5,cex.main=.9,font.main=1)
-  lines(indices,data.frame(df4_ns)[,1],col=rainbow(length(df4_ns)))
-
-mtext("Days since admission",side=1,line=1.2,outer=TRUE,cex=.9)
-mtext("Spearman Correlation",side=2,line=.6,outer=TRUE,cex=.9,las=0)
-mtext(final_names4[[1]],side=3,line=-.8,outer=TRUE,cex = 1.2,font.main=2)
-
-#group 5
-
-df = df5_s
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names5[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
-
-df = df5_ns
-
-par(mfrow=c(3,1),omi=c(0.5,0.3,0,0), plt=c(0.1,0.9,0,0.5))
-
-for (i in 1:length(df)){
-  plot(indices,data.frame(df)[,i],pch=NA,ylim=c(-.5,1),xlab="",ylab="")
-  title(final_names5[i],line=.5,cex.main=1.1,font.main=1)
-  lines(indices,data.frame(df)[,i],col=rainbow(length(df)))
-}
-mtext("Days since admission",side=1,line=2.2,outer=TRUE,cex=.8)
-mtext("Spearman Correlation",side=2,line=.8,outer=TRUE,cex=.8,las=0)
-mtext("Non-Severe",side=3,line=-2.5,outer=TRUE,cex = 1.2,font.main=2)
 
 
 ```
 
+
 ```{r}
-
-
 
 #Calculate proportion of existing lab values in binned days since admission (by 50 days) up to 300 days. Stratify by severe vs. non-severe.
 
@@ -1869,13 +1475,12 @@ sessionInfo()
 ```
 
 ```{r}
-save(penn_na_df, penn_patient_lab, penn_agg_n_values,df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,highcorr_temporal_penn,interesting_temporal_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,
+save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,
   file = "results/penn-results-quantify-missingness.Rdata"
 )
 
 ggsave('figs/prop_plot_penn.png', prop_plot)
 ggsave('figs/num_plot_penn.png',num_plot)
-ggsave('figs/vis_miss_penn.png',vis_miss_penn)
 ggsave('figs/longhaul_comb_plot_penn.png',longhaul_comb_plot)
 ggsave('figs/longhaul_plot_penn.png',longhaul_plot)
 ggsave('figs/shorthaul_comb_plot_penn.png',shorthaul_comb_plot)

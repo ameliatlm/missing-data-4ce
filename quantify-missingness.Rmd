@@ -193,6 +193,8 @@ df_num_penn = df_num
 require(gridExtra)
 grid.arrange(prop_plot,num_plot,ncol=1)
 
+props_penn = props
+
 
 
 
@@ -388,6 +390,11 @@ prop_plot_diff_severity_penn = ggplot(data = df_prop_diff_Severity_penn,
 prop_plot_diff_severity_penn
 
 
+
+props_M_penn = props_M
+props_F_penn = props_F
+props_S_penn = props_S
+props_NS_penn = props_NS
 
 
 ```
@@ -1447,7 +1454,7 @@ sessionInfo()
 ```
 
 ```{r}
-save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,
+save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,props_penn,props_S_penn,props_NS_penn,props_F_penn,props_M_penn,
   file = "results/penn-results-quantify-missingness.Rdata"
 )
 

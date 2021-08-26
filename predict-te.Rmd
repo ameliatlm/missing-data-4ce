@@ -315,18 +315,20 @@ demo_df$ARDs %>% sum()
 
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
+  filter(days_since_admission >= 0, !is.na(short_name)) %>%
   dplyr::select(-concept_code) %>%
-  filter(!is.na(short_name)) %>% 
   pivot_wider(
     id_cols = c(patient_num, days_since_admission),
     names_from = short_name,
     values_from = value,
     values_fn = mean
-  )
-outcome <- "TE"
-outcome2 <- "AKI"
-outcome3 <- "Severe"
-outcome4 <- "Neuro"
+  ) 
+
+if ("FEU" %in% colnames(patient_obs_wide)) {
+  colnames(patient_obs_wide)[which(colnames(patient_obs_wide)=="FEU")] <- "DDU"
+}
+
+
 # outcome <- "deceased"
 ```
 
@@ -351,6 +353,17 @@ missing_by_patient <- patient_obs_wide %>%
   })) %>%
   left_join(demo_df, by = "patient_num")
 
+missing_by_patient$Troponin = missing_by_patient$Troponin_high +   missing_by_patient$Troponin_normal
+
+drops = c("Troponin_high","Troponin_normal")
+
+missing_by_patient= missing_by_patient[,!(names(missing_by_patient) %in% drops)]
+
+allLabs <- c("Fibrinogen","Procalcitonin","DDU","Troponin","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
+labsPresent <- allLabs[ allLabs %in% colnames(missing_by_patient)]
+
+lab_names = labsPresent
+
 #Obtain total number of observations per lab for TE patients
 
 uniq_vals <-
@@ -358,10 +371,6 @@ uniq_vals <-
     length(unique(x))
   })
 
-#Isolate lab names
-
-lab_names <-
-  intersect(lab_bounds$short_name, names(missing_by_patient))
 
 #Remove patients that have no lab values
 
@@ -495,8 +504,13 @@ We want to: maximize likelihood, lower bound, semantic coherence and minimize re
 
 #Change K depending on what the optimal number of topics is based on the plots above (maximize likelihood, lower bound, semantic coherence, and minimize residuals)
 
-K <- 5
+K <- 4
 stmfit1 <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE)
+
+stmlist = list()
+for (i in 1:nrow(x_dfm)){
+  stmlist[[i]] = x_mat[i,]
+}
 
 stmfit_beta_penn <- stmfit1$beta
 
@@ -523,7 +537,7 @@ The darker the colors, the more the presence of that lab values contribute to th
 ```{r}
 
 #Beta matrix contains log probabilities of labs in topics. Generate heat map of beta values for each lab.
-K=5
+K=4
 beta_mat1 <- exp(stmfit1$beta$logbeta[[1]])
 colnames(beta_mat1) <- stmfit1$vocab
 rownames(beta_mat1) <- paste("Topic", 1:K)
@@ -552,7 +566,7 @@ save(all_evals, beta_mat2, file = "results/beta_matrix2_penn.Rdata")
 
 ```{r}
 theta <- stmfit1$theta
-K = 5
+K = 4
 
 corrFunc <- function(var1, var2) {
   result = cor.test(var1,var2)
@@ -594,7 +608,7 @@ ARDs_results2_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(mi
 ```{r}
 
 theta <- stmfit1$theta
-K = 5
+K = 4
 
 #TE 
 

@@ -1454,7 +1454,7 @@ sessionInfo()
 ```
 
 ```{r}
-save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,props_penn,props_S_penn,props_NS_penn,props_F_penn,props_M_penn,
+save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,bin_nobs_penn,
   file = "results/penn-results-quantify-missingness.Rdata"
 )
 

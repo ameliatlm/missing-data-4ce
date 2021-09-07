@@ -42,19 +42,18 @@ dateFormat <- "%d-%b-%y"
 
 demo_raw <-
   readr::read_csv(
-    file.path(data_dir, "LocalPatientSummary.csv"),
+    file.path(my_dir, "LocalPatientSummary.csv"),
     col_types = list(patient_num = readr::col_character()),
-    na = "1900-01-01"
+    na = c("1900-01-01", "1/1/1900")
   ) %>%
-  mutate(across(ends_with("_date") & where(is.character), lubridate::mdy)) %>%
   mutate(
+    across(ends_with("_date") & where(is.character), lubridate::mdy),     
     last_discharge_date = if_else(
       !is.na(death_date) & death_date < last_discharge_date,
       death_date,
       last_discharge_date
     )
   )
-
 
 #Read in thrombotic icd codes. Add column "truncated code" for first three characters of each code. Extract unique truncated codes. 
 
@@ -205,7 +204,7 @@ grid.arrange(prop_plot,num_plot,ncol=1)
 
 props_quant_penn = colQuantiles(as.matrix(props))
 
-
+samplesize_penn = nrow(props)
 
 
 
@@ -411,6 +410,10 @@ props_F_quant_penn = colQuantiles(as.matrix(props_F))
 props_S_quant_penn = colQuantiles(as.matrix(props_S))
 props_NS_quant_penn = colQuantiles(as.matrix(props_NS))
 
+ssM_penn = nrow(props_M)
+ssF_penn = nrow(props_F)
+ssS_penn = nrow(props_S)
+ssNS_penn = nrow(props_NS)
 
 ```
 
@@ -420,362 +423,7 @@ props_NS_quant_penn = colQuantiles(as.matrix(props_NS))
 
 ```{R,warning=FALSE} 
 
-#For all patients
-
-#Calculate the Spearman correlation between lab missingness indicators to see if certain labs tend to be missing together. 
-
-#dat corresponds to the patient_obs_wide variable
-#prop_greater is the desired proportion of spearman correlation values greater than the threshold
-#min_corr corresponds to the threshold
-#type corresponds to patient type (options are all patients ("All"), TE patients ("TE"), non-TE patients ("non-TE")). Automatically set to all patients. 
-#label is how the graph should be labeled according to patient type. Automatically set to "All Patients". 
-
-demo_raw$date_diff <- as.Date(as.character(demo_raw$last_discharge_date), format="%Y-%m-%d")-
-                  as.Date(as.character(demo_raw$admission_date), format="%Y-%m-%d")
-
-patient_obs_wide <- patient_obs %>%
-  left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
-  filter(days_since_admission >= 0, !is.na(short_name)) %>%
-  dplyr::select(-concept_code) %>%
-  pivot_wider(
-    id_cols = c(patient_num, days_since_admission),
-    names_from = short_name,
-    values_from = value,
-    values_fn = mean
-  ) %>%
-  left_join(dplyr::select(demo_raw, patient_num, severe), by = "patient_num") %>%
-  mutate(severity = factor(severe) %>%
-    fct_recode("severe" = "1", "nonsevere" = "0")) %>%
-  dplyr::select(-severe)
-
-if ("FEU" %in% colnames(patient_obs_wide)) {
-  colnames(patient_obs_wide)[which(colnames(patient_obs_wide)=="FEU")] <- "DDU"
-}
-
-dates_diff = c()
-for (i in 1:nrow(demo_raw)){
-  dates_diff = c(dates_diff,rep(demo_raw$date_diff[i],sum(patient_obs_wide$patient_num==i)))
-}
-
-patient_obs_wide = patient_obs_wide[patient_obs_wide$days_since_admission <= dates_diff,]
-
-patient_obs_wide$Troponin = patient_obs_wide$Troponin_high + patient_obs_wide$Troponin_normal
-
-for (i in 1:length(patient_obs_wide$Troponin)){
-  if (!is.na(patient_obs_wide$Troponin_high[i]) | !is.na(patient_obs_wide$Troponin_normal[i])) {
-    patient_obs_wide$Troponin[i] = 1
-  }
-  else {
-    patient_obs_wide$Troponin[i] = patient_obs_wide$Troponin_high[i]
-  }
-}
-
-drops = c("Troponin_high","Troponin_normal")
-
-patient_obs_wide= patient_obs_wide[,!(names(patient_obs_wide) %in% drops)]
-
-allLabs <- c("Fibrinogen","Procalcitonin","DDU","Troponin","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
-labsPresent <- allLabs[ allLabs %in% colnames(patient_obs_wide)]
-
-dat = patient_obs_wide
-min_corr = 0
-prop_greater = 0
-
-te_labs2 <- dat %>% 
-  filter(days_since_admission < 100,
-         days_since_admission >= 0) %>% 
-  mutate(te = patient_num %in% unique(te_patients$patient_num))
-
-#Calculate correlation matrices between lab missing indicators for each time point
-
-sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
-mat_list = list()
-
-for (h in 0:max(te_labs2$days_since_admission)){
-
-data1 = te_labs2[which(te_labs2$days_since_admission==h),]
-
-na_stats <- data1 %>% 
-  dplyr::select(- c(days_since_admission,patient_num,te,severity)) %>% 
-  is.na() %>% 
-  `!` 
-
-
-for (i in 1:ncol(na_stats)){
-  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
-}
-
-sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    if (nrow(na_stats) >= 5) {
-      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
-    }
-  }
-}
-
-rownames(sim_mat) <- colnames(na_stats)
-colnames(sim_mat) <- colnames(na_stats)
-
-mat_list[[h+1]] = sim_mat
-
-}
-
-#Add correlation values to a dataframe if a lab combination passes the threshold
-
-df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-names = list()
-final_names = c()
-count = 0
-
-
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
-    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
-    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
-    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
-    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
-      test_vec = c()
-      indices = c()
-      ct = 0
-      for (h in 1:length(mat_list)){
-        if (!(is.na(mat_list[[h]][i,j]))) {
-          ct = ct+1
-          test_vec[ct] = mat_list[[h]][i,j]
-          indices[ct] = h
-        }else{
-          ct = ct + 1
-          test_vec[ct] = test_vec[ct-1]
-          indices[ct] = h
-        }
-      }
-      
-      if (mean(abs(test_vec) > min_corr) > prop_greater) {
-        count = count+1
-        final_names[count] = name1
-        df[,count] = test_vec
-        df_ind[,count] = indices
-      }
-
-    }
-    }
-}
-  
-
-colnames(df) <- final_names
-
-results <- list()
-results[[1]] <- df
-results[[2]] <- mat_list
-
-
-temporal_penn = df
-
-#Get df for severe
-
-dat = patient_obs_wide
-dat = dat[dat$severity=='severe',]
-min_corr = 0
-prop_greater = 0
-
-te_labs2 <- dat %>% 
-  filter(days_since_admission < 100,
-         days_since_admission >= 0) %>% 
-  mutate(te = patient_num %in% unique(te_patients$patient_num))
-
-#Calculate correlation matrices between lab missing indicators for each time point
-
-sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
-mat_list = list()
-
-for (h in 0:max(te_labs2$days_since_admission)){
-
-data1 = te_labs2[which(te_labs2$days_since_admission==h),]
-
-na_stats <- data1 %>% 
-  dplyr::select(- c(days_since_admission,patient_num,te,severity)) %>% 
-  is.na() %>% 
-  `!` 
-
-
-for (i in 1:ncol(na_stats)){
-  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
-}
-
-sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    if (nrow(na_stats) >= 5) {
-      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
-    }
-  }
-}
-
-rownames(sim_mat) <- colnames(na_stats)
-colnames(sim_mat) <- colnames(na_stats)
-
-mat_list[[h+1]] = sim_mat
-
-}
-
-#Add correlation values to a dataframe if a lab combination passes the threshold
-
-df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-names = list()
-final_names = c()
-count = 0
-
-
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
-    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
-    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
-    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
-    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
-      test_vec = c()
-      indices = c()
-      ct = 0
-      for (h in 1:length(mat_list)){
-        if (!(is.na(mat_list[[h]][i,j]))) {
-          ct = ct+1
-          test_vec[ct] = mat_list[[h]][i,j]
-          indices[ct] = h
-        }else{
-          ct = ct + 1
-          test_vec[ct] = test_vec[ct-1]
-          indices[ct] = h
-        }
-      }
-      
-      if (mean(abs(test_vec) > min_corr) > prop_greater) {
-        count = count+1
-        final_names[count] = name1
-        df[,count] = test_vec
-        df_ind[,count] = indices
-      }
-
-    }
-    }
-}
-  
-
-colnames(df) <- final_names
-
-results <- list()
-results[[1]] <- df
-results[[2]] <- mat_list
-
-temporal_severe_penn = df
-
-#get df for non-severe
-
-dat = patient_obs_wide
-dat = dat[dat$severity=='nonsevere',]
-min_corr = 0
-prop_greater = 0
-
-te_labs2 <- dat %>% 
-  filter(days_since_admission < 100,
-         days_since_admission >= 0) %>% 
-  mutate(te = patient_num %in% unique(te_patients$patient_num))
-
-#Calculate correlation matrices between lab missing indicators for each time point
-
-sim_mat = matrix(rep(0),ncol(te_labs2)-4,ncol(te_labs2)-4)
-mat_list = list()
-
-for (h in 0:max(te_labs2$days_since_admission)){
-
-data1 = te_labs2[which(te_labs2$days_since_admission==h),]
-
-na_stats <- data1 %>% 
-  dplyr::select(- c(days_since_admission,patient_num,te,severity)) %>% 
-  is.na() %>% 
-  `!` 
-
-
-for (i in 1:ncol(na_stats)){
-  na_stats[,i] <- as.integer(as.logical(na_stats[,i]))
-}
-
-sim_mat = matrix(rep(0),ncol(na_stats),ncol(na_stats))
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    if (nrow(na_stats) >= 5) {
-      sim_mat[i,j] <- cor(na_stats[,i],na_stats[,j],method="spearman")
-    }
-  }
-}
-
-rownames(sim_mat) <- colnames(na_stats)
-colnames(sim_mat) <- colnames(na_stats)
-
-mat_list[[h+1]] = sim_mat
-
-}
-
-#Add correlation values to a dataframe if a lab combination passes the threshold
-
-df <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-df_ind <- data.frame(matrix(ncol=0,nrow=length(mat_list)))
-names = list()
-final_names = c()
-count = 0
-
-
-
-for (i in 1:ncol(na_stats)){
-  for (j in 1:ncol(na_stats)){
-    name1 <- c(row.names(mat_list[[1]])[i],colnames(mat_list[[1]])[j])
-    name1 <- do.call(paste, c(as.list(name1), sep = ", "))
-    name2 <- c(row.names(mat_list[[1]])[j],colnames(mat_list[[1]])[i])
-    name2 <- do.call(paste, c(as.list(name2), sep = ", "))
-    if (i != j && !(name1 %in% final_names) && !(name2 %in% final_names)) {
-      test_vec = c()
-      indices = c()
-      ct = 0
-      for (h in 1:length(mat_list)){
-        if (!(is.na(mat_list[[h]][i,j]))) {
-          ct = ct+1
-          test_vec[ct] = mat_list[[h]][i,j]
-          indices[ct] = h
-        }else{
-          ct = ct + 1
-          test_vec[ct] = test_vec[ct-1]
-          indices[ct] = h
-        }
-      }
-      
-      if (mean(abs(test_vec) > min_corr) > prop_greater) {
-        count = count+1
-        final_names[count] = name1
-        df[,count] = test_vec
-        df_ind[,count] = indices
-      }
-
-    }
-    }
-}
-  
-
-colnames(df) <- final_names
-
-results <- list()
-results[[1]] <- df
-results[[2]] <- mat_list
-
-temporal_nonsevere_penn = df
-
-
+f
 
 
 ```
@@ -1187,7 +835,7 @@ sessionInfo()
 ```
 
 ```{r}
-save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,props_quant_penn,props_M_quant_penn,props_F_quant_penn,props_S_quant_penn,props_NS_quant_penn,
+save(df_prop_penn,df_num_penn,df_prop_Sex_penn,df_prop_Severity_penn,temporal_penn,temporal_severe_penn,temporal_nonsevere_penn,longhaul_comb_penn,longhaul_penn,shorthaul_comb_penn,shorthaul_penn,props_quant_penn,props_M_quant_penn,props_F_quant_penn,props_S_quant_penn,props_NS_quant_penn,samplesize_penn,ssM_penn,ssF_penn,ssS_penn,ssNS_penn,
   file = "results/penn-results-quantify-missingness.Rdata"
 )
 

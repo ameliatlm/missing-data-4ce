@@ -7,8 +7,9 @@ knit: (function(inputFile, encoding) {
 ---
 ```{r setup}
 source('R/utils.R')
-required_pkgs <- c('tidyverse', 'lubridate', 'stm', 'RColorBrewer','beepr','RcppRoll','purrr','mSTEM','Rcpp','FourCePhase2.1AKI','MCMCpack')
+required_pkgs <- c('tidyverse', 'lubridate', 'stm', 'RColorBrewer','beepr','RcppRoll','purrr','mSTEM','Rcpp','MCMCpack')
 install_required(required_pkgs)
+
 
 library(tidyverse)
 library(lubridate)
@@ -19,7 +20,6 @@ library(RcppRoll)
 library(purrr)
 library(mSTEM)
 library(Rcpp)
-library(FourCePhase2.1AKI)
 library(MCMCpack)
 ```
 
@@ -70,8 +70,15 @@ demo_raw <-
     )
   )
 
+course <- 
+  readr::read_csv(
+    file.path(my_dir, "clinicalcourse-upenn.csv"),
+  )
+
 
 ```
+
+
 
 ```{r}
 
@@ -90,159 +97,6 @@ neuro_codes <- c("R41","R27","R42","G44","G03","G04","G72","M60","G61","G65","R4
 ARDs_codes <- c("J80")
 
 ```
-
-```{r}
-
-#Get AKI patients
-
-#Code from AKI Group (https://github.com/covidclinical/Phase2.1AKIRPackage)
-
-observations = patient_obs
-demographics = demo_raw
-
-demographics <- demographics %>% dplyr::mutate(patient_id=paste("Penn",patient_num,sep="_"))
-
-
-    demographics_filt <- demographics %>% dplyr::mutate(time_to_severe = ifelse(severe == 1, as.numeric(as.Date(severe_date) - as.Date(admission_date)),NA))
-    demographics_filt <- demographics_filt %>% dplyr::mutate(time_to_death = ifelse(deceased == 1, as.numeric(as.Date(death_date) - as.Date(admission_date)),NA))
-    demographics_filt <- demographics_filt %>% dplyr::mutate(length_stay = ifelse(still_in_hospital==1,days_since_admission,as.numeric(as.Date(last_discharge_date) - as.Date(admission_date))))
-    
-    # Reorder the columns to be more readable
-    demographics_filt <- demographics_filt %>% dplyr::select(patient_num,siteid,sex,age_group,race,length_stay,severe,time_to_severe,deceased,time_to_death)
-    
-
-
-diagnosis <- observations[observations$concept_type %in% c("DIAG-ICD9","DIAG-ICD10"),-6]
-    colnames(diagnosis) <- c("patient_num","siteid","days_since_admission","concept_type","icd_code")
-    
-
-procedures <- observations[observations$concept_type %in% c("PROC-ICD9", "PROC-ICD10"),-6]
-colnames(procedures) <- c("patient_num","siteid","days_since_admission","icd_version","procedure_code")
-    
-# Extract serum Cr levels
-    labs_cr_aki <- observations[observations$concept_code == '2160-0',] #LOINC code for Cr 2160-0
-    # Remove unnecessary columns
-    labs_cr_aki <- labs_cr_aki[,-c(4,5)]
-    # Filter for labs >= -90 days
-    labs_cr_aki <- labs_cr_aki %>% dplyr::filter(days_since_admission >= -90)
-    
-    # Generate separate demographics table for patients who do not have any sCr values fulfilling 
-    # the above (e.g. all the labs are before t= -90days or patient has no sCr value)
-    message("Removing patients who do not have any serum creatinine values during admission...")
-    pts_valid_cr <- labs_cr_aki %>% dplyr::filter(days_since_admission >= 0)
-    pts_valid_cr <- unique(pts_valid_cr$patient_num)
-    demog_no_cr <- demographics_filt[!(demographics_filt$patient_num %in% pts_valid_cr),]
-    demographics_filt <- demographics_filt[demographics_filt$patient_num %in% pts_valid_cr,]
-    labs_cr_aki <- labs_cr_aki[labs_cr_aki$patient_num %in% pts_valid_cr,]
-    # There are two possible scenarios which we have to consider when detecting each AKI event:
-    # (1) AKI occurs after admission
-    #   - easy to detect with the formal KDIGO definition as we only need to use older data points
-    #   - we can use an approach similar to what is used in the MIMIC-III data-set: use a rolling
-    #     time frame and detect the lowest Cr value to use as our baseline
-    # (2) Patient presents with an AKI at the time of admission 
-    #   - this makes it harder for us to determine what is the true baseline especially with limited
-    #     longitudinal data
-    #   - Hence one way to get around this is to generate a "retrospective" baseline (i.e. look into
-    #     future Cr values and find the minimum in a rolling timeframe) and use this as a surrogate
-    #     baseline
-    #   - Such a workaround is the only feasible way of dealing with missing retrospective data though
-    #     it is likely that we may miss quite a number of true AKIs using this method
-    
-    # Scenario (1): AKI occurs during admission
-    # Find minimum Cr level in a rolling 90 day timeframe
-    message("Generating minimum Cr level in the past 90 days")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-90,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_90d = RcppRoll::roll_min(value,91,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
-    # Find minimum Cr level in a rolling 2 day timeframe (48h)
-    message("Generating minimum Cr level in the past 48h")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission)-2,max(days_since_admission)))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="right")) %>% dplyr::filter(!is.na(value))
-    
-    # Scenario (2): Patient presents with an AKI already on board
-    # Find minimum Cr level in a rolling 7 day timeframe
-    message("Generating minimum Cr level 7 days in the future")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+7))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_retro_7day = RcppRoll::roll_min(value,8,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
-    # Find minimum Cr level in a rolling 2 day timeframe (48h)
-    message("Generating minimum Cr level 48h in the future")
-    labs_cr_aki <- data.table::data.table(labs_cr_aki,key=c("patient_num","days_since_admission"))
-    labs_cr_aki <- labs_cr_aki[data.table::CJ(unique(patient_num),seq(min(days_since_admission),max(days_since_admission)+2))] # temporarily fill in null rows for missing days - the minimum rolling code only works for consecutive data
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num) %>% dplyr::mutate(min_cr_48h_retro = RcppRoll::roll_min(value,3,fill=NA,na.rm=TRUE,align="left")) %>% dplyr::filter(!is.na(value))
-    
-        
-
-    
-    
-    
-labs_cr_aki <- data.table::setDT(labs_cr_aki)[,':='(cr_7d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+7,incbounds = TRUE)],1),cr_90d = tail(labs_cr_aki$value[labs_cr_aki$patient_num==patient_num][data.table::between(labs_cr_aki$days_since_admission[labs_cr_aki$patient_num==patient_num],days_since_admission,days_since_admission+90,incbounds = TRUE)],1)),by=c('patient_num','days_since_admission')][]
-    
-    # At this point, our table has these headers:
-    # patient_id  siteid  days_since_admission  value min_cr_90d min_cr_48h  min_cr_retro_7day min_cr_48h_retro  cr_7d cr_90d
-    
-    # Now we have to start grading AKI severity at each time point
-    # This approach is similar to how the MIMIC-III dataset generates AKI severity
-    # Generate two columns using both the formal KDIGO AKI definition and the modified retrospective AKI definition
-    message("Generating KDIGO severity grades for each serum Cr value")
-    labs_cr_aki$aki_kdigo <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade)
-    labs_cr_aki$aki_kdigo_retro <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::aki_kdigo_grade_retro)
-    labs_cr_aki <- labs_cr_aki %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(aki_kdigo_final = max(aki_kdigo,aki_kdigo_retro))
-    
-    # Generate two columns grading AKD severity at 7d and 90d (grade 0B/C is coded as 0.5)
-    labs_cr_aki$akd_7d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_7d)
-    labs_cr_aki$akd_90d <- apply(labs_cr_aki,1,FourCePhase2.1AKI:::akd_grade_90d)
-    
-    # Now we are going to generate the start days of each AKI
-    labs_cr_aki_tmp <- labs_cr_aki
-    labs_cr_aki_tmp$valid = 1
-    
-    # Find the day of the minimum Cr used for grading AKIs (taken as baseline)
-    message("Now finding the day at which the minimum serum Cr is achieved")
-    labs_cr_aki_tmp <- labs_cr_aki_tmp %>% dplyr::group_by(patient_num) %>% tidyr::complete(days_since_admission = tidyr::full_seq(days_since_admission,1)) %>% dplyr::mutate(value = zoo::na.fill(value,Inf))
-    labs_cr_aki_tmp2 <- labs_cr_aki_tmp
-    labs_cr_aki_tmp3 <- labs_cr_aki_tmp
-    labs_cr_aki_tmp2 <- labs_cr_aki_tmp2 %>% split(.$patient_num) %>% purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
-    colnames(labs_cr_aki_tmp2)[2] <- "day_min"
-    labs_cr_aki_tmp3 <- labs_cr_aki_tmp3 %>% split(.$patient_num) %>%  purrr::map_df(~dplyr::data_frame(.x),.id='patient_num')
-    colnames(labs_cr_aki_tmp3)[2] <- "day_min_retro"
-    labs_cr_aki_tmp4 <- cbind(labs_cr_aki_tmp,"day_min" = labs_cr_aki_tmp2$day_min,"day_min_retro" = labs_cr_aki_tmp3$day_min_retro)
-    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4[!is.na(labs_cr_aki_tmp4$valid),]
-    
-    # Generate delta_cr
-    message("Now identifying maxima points of serum Cr")
-    labs_cr_aki_tmp4 <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num,days_since_admission) %>% dplyr::mutate(min_cr_7d_final = min(min_cr_90d,min_cr_retro_7day,na.rm=TRUE)) %>% dplyr::mutate(delta_cr = value - min_cr_7d_final)
-    
-    # Use the largest delta_cr to find the peak of each AKI
-    labs_cr_aki_delta_maxima <- labs_cr_aki_tmp4 %>% dplyr::group_by(patient_num) %>% dplyr::filter(delta_cr %in% delta_cr[which.peaks(delta_cr,decreasing=FALSE)])
-    labs_cr_aki_delta_maxima$delta_is_max = 1
-    labs_cr_aki_delta_maxima <- labs_cr_aki_delta_maxima %>% dplyr::rename(delta_maxima = delta_cr) %>% dplyr::select(patient_num,days_since_admission,delta_maxima,delta_is_max)
-    labs_cr_aki_tmp4 <- merge(labs_cr_aki_tmp4,labs_cr_aki_delta_maxima,by=c("patient_num","days_since_admission"),all.x=TRUE)
-    
-    # Filter for KDIGO grades > 0
-    message("Now generating tables of all AKI events")
-    labs_cr_aki_tmp5 <- labs_cr_aki_tmp4[labs_cr_aki_tmp4$aki_kdigo_final > 0,]
-    labs_cr_aki_tmp5[is.na(labs_cr_aki_tmp5)] <- 0
-    # Filter for maxima of delta_cr (which should give us the peaks)
-    labs_cr_aki_tmp5 <- labs_cr_aki_tmp5[labs_cr_aki_tmp5$delta_is_max > 0,]
-    
-    # Filter and reorder columns to generate our final table of all AKI events
-    labs_aki_summ <- labs_cr_aki_tmp5 %>% dplyr::select(patient_num,siteid,days_since_admission,value,day_min,day_min_retro,min_cr_90d,min_cr_48h,min_cr_retro_7day,min_cr_48h_retro,min_cr_7d_final,cr_7d,cr_90d,delta_cr,aki_kdigo,aki_kdigo_retro,aki_kdigo_final,akd_7d,akd_90d)
-    
-    labs_aki_summ <- labs_aki_summ %>% dplyr::distinct(patient_num,days_since_admission,.keep_all=TRUE)
-    labs_aki_summ <- labs_aki_summ %>% dplyr::filter(days_since_admission >= 0)
-       
-    
-
-    
-
-
-
-
-
-```
-
 ```{r}
 
 #Isolate patients with thrombotic events and remove the days_since_admission column. 
@@ -266,8 +120,6 @@ neuro_patients <- patient_obs %>%
   dplyr::select(-days_since_admission) %>%
   distinct()
 
-AKI_patients <- patient_obs[patient_obs$patient_num %in% as.integer(unique(labs_aki_summ$patient_num)),] 
-
 ARDs_patients <- patient_obs %>%
   filter(
     concept_type == "DIAG-ICD10",
@@ -287,13 +139,6 @@ demo_df <- demo_raw %>%
   )
 demo_df$TE %>% sum()
 
-demo_df <- demo_df %>%
-  mutate(
-    AKI = patient_num %in% unique(AKI_patients$patient_num),
-    deceased = deceased == 1,
-    severe = severe == 1
-  )
-demo_df$AKI %>% sum()
 
 demo_df <- demo_df %>%
   mutate(
@@ -315,22 +160,17 @@ demo_df$ARDs %>% sum()
 
 patient_obs_wide <- patient_obs %>%
   left_join(lab_bounds, by = c("concept_code" = "LOINC")) %>%
-  filter(days_since_admission >= 0, !is.na(short_name)) %>%
   dplyr::select(-concept_code) %>%
+  filter(!is.na(short_name)) %>% 
   pivot_wider(
     id_cols = c(patient_num, days_since_admission),
     names_from = short_name,
     values_from = value,
     values_fn = mean
-  ) 
+  )
 
-if ("FEU" %in% colnames(patient_obs_wide)) {
-  colnames(patient_obs_wide)[which(colnames(patient_obs_wide)=="FEU")] <- "DDU"
-}
-
-
-# outcome <- "deceased"
 ```
+
 
 ## Unsupervised learning: LDA
 
@@ -520,7 +360,7 @@ save(stmfit_beta_penn,
 
 
 
-K <- Modes(ind)
+K <- Modes(ind)[1]
 stmfit2 <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE)
 
 stmfit_beta2_penn <- stmfit2$beta
@@ -541,23 +381,17 @@ K=4
 beta_mat1 <- exp(stmfit1$beta$logbeta[[1]])
 colnames(beta_mat1) <- stmfit1$vocab
 rownames(beta_mat1) <- paste("Topic", 1:K)
-heatmap(t(beta_mat1), Rowv = NA, Colv = NA, 
-        col= colorRampPalette(brewer.pal(8, "Blues"))(25),
-        main = "Unordered")
-heatmap(t(beta_mat1), main = "Ordered",
+heatmap((beta_mat1), main = "Ordered",
         col= colorRampPalette(brewer.pal(8, "Blues"))(25))
 legend(x="topleft", legend=c("min", "ave", "max"), 
      fill=colorRampPalette(brewer.pal(8, "Blues"))(3))
 save(all_evals, beta_mat1, file = "results/beta_matrix1_penn.Rdata")
 
-K=Modes(ind)
+K=Modes(ind)[1]
 beta_mat2 <- exp(stmfit2$beta$logbeta[[1]])
 colnames(beta_mat2) <- stmfit2$vocab
 rownames(beta_mat2) <- paste("Topic", 1:K)
-heatmap(t(beta_mat2), Rowv = NA, Colv = NA, 
-        col= colorRampPalette(brewer.pal(8, "Blues"))(25),
-        main = "Unordered")
-heatmap(t(beta_mat2), main = "Ordered",
+heatmap((beta_mat2), main = "Ordered",
         col= colorRampPalette(brewer.pal(8, "Blues"))(25))
 legend(x="topleft", legend=c("min", "ave", "max"), 
      fill=colorRampPalette(brewer.pal(8, "Blues"))(3))
@@ -578,8 +412,6 @@ corrFunc <- function(var1, var2) {
 
 TE_results1_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
 
-AKI_results1_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$AKI))[c("estimate","p.value","statistic","method")])
-
 Severity_results1_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
 
 Neuro_results1_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro))[c("estimate","p.value","statistic","method")])
@@ -590,11 +422,9 @@ ARDs_results1_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(mi
 
 
 theta <- stmfit2$theta
-K = Modes(ind)
+K = Modes(ind)[1]
 
 TE_results2_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
-
-AKI_results2_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$AKI))[c("estimate","p.value","statistic","method")])
 
 Severity_results2_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
 
@@ -630,23 +460,6 @@ TE_boxplot1_penn
 
 
 
-#AKI
-
-topic_df <- data.frame(theta, AKI = missing_by_patient$AKI) %>% 
-  pivot_longer(- AKI, names_to = 'topic') %>% 
-  mutate(topic = gsub('X', 'Topic ', topic))
-
-AKI_boxplot1_penn <- topic_df %>% 
-  ggplot(aes(x = AKI, y = value)) +
-  labs(
-    x = "Acute Kidney Injury",
-    y = "Topic Value"
-  ) +
-  geom_boxplot(alpha = 0.2) +
-  facet_wrap(~ topic, scales = 'free') +
-  NULL
-
-AKI_boxplot1_penn
 
 #Severity
 
@@ -731,25 +544,6 @@ TE_boxplot2_penn <- topic_df %>%
 TE_boxplot2_penn
 
 
-
-#AKI
-
-topic_df <- data.frame(theta, AKI = missing_by_patient$AKI) %>% 
-  pivot_longer(- AKI, names_to = 'topic') %>% 
-  mutate(topic = gsub('X', 'Topic ', topic))
-
-AKI_boxplot2_penn <- topic_df %>% 
-  ggplot(aes(x = AKI, y = value)) +
-  labs(
-    x = "Acute Kidney Injury",
-    y = "Topic Value"
-  ) +
-  geom_boxplot(alpha = 0.2) +
-  facet_wrap(~ topic, scales = 'free') +
-  NULL
-
-AKI_boxplot2_penn
-
 #Severity
 
 topic_df <- data.frame(theta, Severity = missing_by_patient$severe) %>% 
@@ -814,18 +608,16 @@ Run All (not Knit).
 Please share a screenshot of the result if possible!
 You may have to install the tm package with `install.packages('tm')`.
 ```{r}
-save(topic_diagnostics_penn,topicQuality1_penn,topicQuality2_penn,TE_results1_penn,AKI_results1_penn,Severity_results1_penn,Neuro_results1_penn,ARDs_results1_penn,TE_results2_penn,AKI_results2_penn,Severity_results2_penn,Neuro_results2_penn,ARDs_results2_penn,stmfit_beta_penn, stmfit_beta2_penn,
+save(topic_diagnostics_penn,topicQuality1_penn,topicQuality2_penn,TE_results1_penn,Severity_results1_penn,Neuro_results1_penn,ARDs_results1_penn,TE_results2_penn,Severity_results2_penn,Neuro_results2_penn,ARDs_results2_penn,stmfit_beta_penn, stmfit_beta2_penn,
   file = "results/penn-results-predict-te.Rdata"
 )
 
 ggsave('figs/topic_diagnostics_plot_penn.png', topic_diagnostics_plot)
 ggsave('figs/TE_boxplot1_penn.png', TE_boxplot1_penn)
-ggsave('figs/AKI_boxplot1_penn.png', AKI_boxplot1_penn)
 ggsave('figs/Severity_boxplot1_penn.png', Severity_boxplot1_penn)
 ggsave('figs/Neuro_boxplot1_penn.png', Neuro_boxplot1_penn)
 ggsave('figs/ARDs_boxplot1_penn.png', ARDs_boxplot1_penn)
 ggsave('figs/TE_boxplot2_penn.png', TE_boxplot2_penn)
-ggsave('figs/AKI_boxplot2_penn.png', AKI_boxplot2_penn)
 ggsave('figs/Severity_boxplot2_penn.png', Severity_boxplot2_penn)
 ggsave('figs/Neuro_boxplot2_penn.png', Neuro_boxplot2_penn)
 ggsave('figs/ARDs_boxplot2_penn.png', ARDs_boxplot2_penn)

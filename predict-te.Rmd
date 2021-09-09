@@ -29,6 +29,10 @@ library(MCMCpack)
 
 my_dir <- "/users/emily/Downloads"
 
+#load beta from NWU:
+load("/Users/emily/Downloads/beta_matrix2_nwu.Rdata")
+apply_betas = beta_mat2
+
 
 theme_set(theme_bw() +
   theme(
@@ -487,10 +491,6 @@ ARDs_boxplot_penn
 ```
 ```{r}
 #Apply NWU topics to new data:
-
-#load beta from NWU:
-load("/Users/emily/Downloads/beta_matrix2_nwu.Rdata")
-apply_betas = beta_mat2
 
 new_mat = x_mat[,order(colnames(x_mat))]
 

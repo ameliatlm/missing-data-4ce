@@ -30,7 +30,7 @@ library(MCMCpack)
 my_dir <- "/users/emily/Downloads"
 
 #load beta from NWU:
-load("/Users/emily/Downloads/beta_matrix2_nwu.Rdata")
+load("~/users/emily/Documents/4ce/public-data/beta_matrix2_nwu.Rdata")
 apply_betas = beta_mat2
 
 
@@ -386,7 +386,7 @@ save(all_evals, beta_mat2, file = "results/beta_matrix_penn.Rdata")
 ```
 
 ```{r}
-theta <- stmfit1$theta
+theta <- stmfit$theta
 
 corrFunc <- function(var1, var2) {
   result = cor.test(var1,var2)
@@ -492,6 +492,14 @@ ARDs_boxplot_penn
 ```{r}
 #Apply NWU topics to new data:
 
+make_matrix <- function(df,rownames = NULL){
+  my_matrix <-  as.matrix(df)
+  if(!is.null(rownames))
+    rownames(my_matrix) = rownames
+  my_matrix
+}
+
+
 new_mat = x_mat[,order(colnames(x_mat))]
 
 x_matrix = make_matrix(new_mat)
@@ -586,6 +594,13 @@ ARDs_boxplot_comb_penn <- topic_df %>%
 
 ARDs_boxplot_comb_penn
 
+K=Modes(ind)[1]
+beta_mat <- apply_betas
+colnames(beta_mat) <- colnames(x_mat)
+rownames(beta_mat) <- paste("Topic", 1:K)
+heatmap((beta_mat), main = "Ordered",
+        col= colorRampPalette(brewer.pal(8, "Blues"))(25))
+
 
 ```
 
@@ -604,14 +619,16 @@ save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,Severity_results_p
 )
 
 ggsave('figs/topic_diagnostics_plot_penn.png', topic_diagnostics_plot)
-ggsave('figs/TE_boxplot_penn.png', TE_boxplot1_penn)
-ggsave('figs/Severity_boxplot_penn.png', Severity_boxplot1_penn)
-ggsave('figs/Neuro_boxplot_penn.png', Neuro_boxplot1_penn)
-ggsave('figs/ARDs_boxplot_penn.png', ARDs_boxplot1_penn)
-ggsave('figs/TE_boxplot_comb_penn.png', TE_boxplot2_penn)
-ggsave('figs/Severity_boxplot_comb_penn.png', Severity_boxplot2_penn)
-ggsave('figs/Neuro_boxplot_comb_penn.png', Neuro_boxplot2_penn)
-ggsave('figs/ARDs_boxplot_comb_penn.png', ARDs_boxplot2_penn)
+ggsave('figs/TE_boxplot_penn.png', TE_boxplot_penn)
+ggsave('figs/Severity_boxplot_penn.png', Severity_boxplot_penn)
+ggsave('figs/Neuro_boxplot_penn.png', Neuro_boxplot_penn)
+ggsave('figs/ARDs_boxplot_penn.png', ARDs_boxplot_penn)
+ggsave('figs/TE_boxplot_comb_penn.png', TE_boxplot_comb_penn)
+ggsave('figs/Severity_boxplot_comb_penn.png', Severity_boxplot_comb_penn)
+ggsave('figs/Neuro_boxplot_comb_penn.png', Neuro_boxplot_comb_penn)
+ggsave('figs/ARDs_boxplot_comb_penn.png', ARDs_boxplot_comb_penn)
+
+
 
 
 

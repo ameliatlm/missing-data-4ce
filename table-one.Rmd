@@ -8,17 +8,18 @@ knit: (function(inputFile, encoding) {
 
 ```{r setup, warning=FALSE, message=FALSE}
 for (r_file in list.files('R', full.names = TRUE, pattern = '.R$')) source(r_file)
-required_pkgs <- c('tidyverse', 'lubridate', 'kableExtra')
+required_pkgs <- c('tidyverse', 'lubridate', 'kableExtra','dplyr')
 install_required(required_pkgs)
 library(tidyverse)
 library(lubridate)
 library(kableExtra)
+library(dplyr)
 ```
 
 
 
 ```{r warning=FALSE, message=FALSE}
-data_dir <- "../4ce/Input"
+data_dir <- "/users/emily/Downloads/"
 
 theme_set(theme_bw() +
   theme(
@@ -64,16 +65,45 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
   pull(truncated_code) %>%
   unique()
 
+#Generate list of neuro codes (obtained from neuro group)
+
+neuro_codes <- c("R41","R27","R42","G44","G03","G04","G72","M60","G61","G65","R43","G93","F29","G40","G45","G46","I60","I61","I62","I67","H54","40","298","307","320","321","322","323","330","331","339","345","348","357","359","369","430","431","432")
+
+ARDs_codes <- c("J80","518")
+
+
 thrombo_patient <- obs_raw %>% 
   filter(concept_code %in% thrombo_codes,
     days_since_admission >= 0)
 
 thrombo_patient %>% 
-  count(patient_num) %>% 
+  dplyr::count(patient_num) %>% 
   pull(n) %>%
   hist(breaks = 36)
   
 thrombo_patient_vec <- unique(thrombo_patient$patient_num)
+
+neuro_patient <- obs_raw %>% 
+  filter(concept_code %in% neuro_codes,
+    days_since_admission >= 0)
+
+neuro_patient %>% 
+  dplyr::count(patient_num) %>% 
+  pull(n) %>%
+  hist(breaks = 36)
+  
+neuro_patient_vec <- unique(neuro_patient$patient_num)
+
+ARDs_patient <- obs_raw %>% 
+  filter(concept_code %in% ARDs_codes,
+    days_since_admission >= 0)
+
+ARDs_patient %>% 
+  dplyr::count(patient_num) %>% 
+  pull(n) %>%
+  hist(breaks = 36)
+  
+ARDs_patient_vec <- unique(ARDs_patient$patient_num)
 
 ```
 
@@ -105,18 +135,18 @@ n_readms <- comp_readmissions %>%
   ) %>%
   add_count(patient_num, name = "n_readmissions") %>%
   arrange(desc(n_readmissions)) %>%
-  select(patient_num, n_readmissions) %>%
+  dplyr::select(patient_num, n_readmissions) %>%
   distinct()
 
 readmissions <- comp_readmissions %>%
   filter(patient_num %in% n_readms$patient_num, first_change) %>%
-  select(patient_num, delta_hospitalized, days_since_admission) %>%
+  dplyr::select(patient_num, delta_hospitalized, days_since_admission) %>%
   pivot_wider(
     names_from = delta_hospitalized,
     values_from = days_since_admission
   ) %>%
   mutate(time_to_first_readmission = `1` - `-1`) %>%
-  select(patient_num, time_to_first_readmission) %>%
+  dplyr::select(patient_num, time_to_first_readmission) %>%
   left_join(n_readms, by = "patient_num")
 
 demo_processed <- demo_raw  %>%
@@ -142,7 +172,9 @@ demo_processed <- demo_raw  %>%
     Survival = as.factor(deceased) %>%
       fct_recode(Alive = "0", Deceased = "1"),
     n_stay = total_stay,
-    thrombo = patient_num %in% thrombo_patient_vec
+    thrombo = patient_num %in% thrombo_patient_vec,
+    neuro = patient_num %in% neuro_patient_vec,
+    ARDs = patient_num %in% ARDs_patient_vec
   ) %>%
   left_join(readmissions, by = "patient_num") %>%
   replace_na(list(n_readmissions = 0))
@@ -156,19 +188,36 @@ For example, below is when `group_var = 'thrombo'` and `group_var = 'deceased'`.
 ```{r}
 CurrSiteId = "UPENN"
 
-obfus_tables <- get_tables(
+obfus_tables_thrombo <- get_tables(
   demo_processed,
   blur_abs = 0,
   mask_thres = 10,
   group_var = 'thrombo'
 ) %>%
   lapply(function(x) mutate(x, site = CurrSiteId))
+
+obfus_tables_neuro <- get_tables(
+  demo_processed,
+  blur_abs = 0,
+  mask_thres = 10,
+  group_var = 'neuro'
+) %>%
+  lapply(function(x) mutate(x, site = CurrSiteId))
+
+obfus_tables_ARDs <- get_tables(
+  demo_processed,
+  blur_abs = 0,
+  mask_thres = 10,
+  group_var = 'ARDs'
+) %>%
+  lapply(function(x) mutate(x, site = CurrSiteId))
 ```
 
 
 ```{r}
+
 combined_table_wide <- 
-  obfus_tables$demo_table %>% 
+  obfus_tables_thrombo$demo_table %>% 
   mutate(
     site = toupper(site),
     variable = tolower(variable),
@@ -194,6 +243,94 @@ combined_table_wide <-
         `True` = "Readmitted"
       )
   )
+
+
+combined_table_wide_thrombo <- 
+  obfus_tables_thrombo$demo_table %>% 
+  mutate(
+    site = toupper(site),
+    variable = tolower(variable),
+    Demo_var = sub("\\..*", "", variable),
+    Demo_var_i = sub(".*\\.", "", variable) %>%
+      gsub("_", " ", .) %>%
+      str_to_title() %>%
+      recode(
+        `00to02` = "0-2",
+        `03to05` = "3-5",
+        `06to11` = "6-11",
+        `12to17` = "12-17",
+        `18to25` = "18-25",
+        `26to49` = "26-49",
+        `50to69` = "50-69",
+        `70to79` = "70-79",
+        `80plus` = "80+",
+        race.white = "White",
+        race.american_indian = "American Indian",
+        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
+        `Hispanic Latino` = "Hispanic/Latino",
+        `False` = "Not Readmitted",
+        `True` = "Readmitted"
+      )
+  )
+
+combined_table_wide_neuro <- 
+  obfus_tables_neuro$demo_table %>% 
+  mutate(
+    site = toupper(site),
+    variable = tolower(variable),
+    Demo_var = sub("\\..*", "", variable),
+    Demo_var_i = sub(".*\\.", "", variable) %>%
+      gsub("_", " ", .) %>%
+      str_to_title() %>%
+      recode(
+        `00to02` = "0-2",
+        `03to05` = "3-5",
+        `06to11` = "6-11",
+        `12to17` = "12-17",
+        `18to25` = "18-25",
+        `26to49` = "26-49",
+        `50to69` = "50-69",
+        `70to79` = "70-79",
+        `80plus` = "80+",
+        race.white = "White",
+        race.american_indian = "American Indian",
+        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
+        `Hispanic Latino` = "Hispanic/Latino",
+        `False` = "Not Readmitted",
+        `True` = "Readmitted"
+      )
+  )
+
+combined_table_wide_ARDs <- 
+  obfus_tables_ARDs$demo_table %>% 
+  mutate(
+    site = toupper(site),
+    variable = tolower(variable),
+    Demo_var = sub("\\..*", "", variable),
+    Demo_var_i = sub(".*\\.", "", variable) %>%
+      gsub("_", " ", .) %>%
+      str_to_title() %>%
+      recode(
+        `00to02` = "0-2",
+        `03to05` = "3-5",
+        `06to11` = "6-11",
+        `12to17` = "12-17",
+        `18to25` = "18-25",
+        `26to49` = "26-49",
+        `50to69` = "50-69",
+        `70to79` = "70-79",
+        `80plus` = "80+",
+        race.white = "White",
+        race.american_indian = "American Indian",
+        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
+        `Hispanic Latino` = "Hispanic/Latino",
+        `False` = "Not Readmitted",
+        `True` = "Readmitted"
+      )
+  )
+
+
+
 ```
 
 
@@ -204,7 +341,29 @@ ordered_vars <- c(
   "all", "sex", "age_group", "race",
   "readmitted", "severity", "survival"
 )
-tableOne_inter <- combined_table_wide %>%
+
+tableOne_inter<- combined_table_wide %>%
+  group_by(variable, Demo_var, Demo_var_i) %>%
+  summarise(across(
+    starts_with("n_var"),
+    function(x) sum(x, na.rm = TRUE)
+  ), .groups = "drop")
+
+tableOne_inter_thrombo <- combined_table_wide_thrombo %>%
+  group_by(variable, Demo_var, Demo_var_i) %>%
+  summarise(across(
+    starts_with("n_var"),
+    function(x) sum(x, na.rm = TRUE)
+  ), .groups = "drop")
+
+tableOne_inter_neuro <- combined_table_wide_neuro %>%
+  group_by(variable, Demo_var, Demo_var_i) %>%
+  summarise(across(
+    starts_with("n_var"),
+    function(x) sum(x, na.rm = TRUE)
+  ), .groups = "drop")
+
+tableOne_inter_ARDs <- combined_table_wide_ARDs %>%
   group_by(variable, Demo_var, Demo_var_i) %>%
   summarise(across(
     starts_with("n_var"),
@@ -265,93 +424,8 @@ tableOne_raw <- tableOne_inter %>%
   )) %>%
   rename("Table 1" = Demo_var_i) 
 
-tableOne_compiled <- tableOne_raw %>%
-  mutate(
-    N = case_when(
-      grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
-      grepl("Median time to severe", `Table 1`) ~ get_table_n("Severe"),
-      grepl("death", `Table 1`) ~ get_table_n("Deceased"),
-      grepl("readmission", `Table 1`) ~ get_table_n("Readmitted"),
-      grepl("Median Elixhauser score", `Table 1`) ~ get_table_n("All Patients"),
-      TRUE ~ N
-    )
-  ) %>% 
-  rename('No thrombotic events' = `FALSE`,
-         'Has thrombotic events' = `TRUE`)
 
-
-kbl(tableOne_compiled) %>%
-  kable_paper("striped", full_width = F) %>%
-  pack_rows("Gender", 2, 3) %>%
-  pack_rows("Age", 4, 10) %>%
-  pack_rows("Race & Ethnicity", 11, 17) %>%
-  # pack_rows("Comorbidites", 20, 20) %>%
-  # pack_rows("Hospital Course", 21, 21) %>%
-  pack_rows("Severity", 20, 21) %>%
-  pack_rows("Survival", 22, 23) %>%
-  pack_rows("Readmission", 18, 19) %>%
-  {.}
-```
-
-
-## Table One, Death
-
-Please change `group_var` here to stratify patients differently.
-
-```{r}
-CurrSiteId = "UPENN"
-obfus_tables <- get_tables(
-  demo_processed,
-  blur_abs = 0,
-  mask_thres = 10,
-  group_var = 'deceased'
-) %>%
-  lapply(function(x) mutate(x, site = CurrSiteId))
-```
-
-
-```{r}
-combined_table_wide <- 
-  obfus_tables$demo_table %>% 
-  mutate(
-    site = toupper(site),
-    variable = tolower(variable),
-    Demo_var = sub("\\..*", "", variable),
-    Demo_var_i = sub(".*\\.", "", variable) %>%
-      gsub("_", " ", .) %>%
-      str_to_title() %>%
-      recode(
-        `00to02` = "0-2",
-        `03to05` = "3-5",
-        `06to11` = "6-11",
-        `12to17` = "12-17",
-        `18to25` = "18-25",
-        `26to49` = "26-49",
-        `50to69` = "50-69",
-        `70to79` = "70-79",
-        `80plus` = "80+",
-        race.white = "White",
-        race.american_indian = "American Indian",
-        `Hawaiian Pacific Islander` = "Hawaiian/Pacific Islander",
-        `Hispanic Latino` = "Hispanic/Latino",
-        `False` = "Not Readmitted",
-        `True` = "Readmitted"
-      )
-  )
-```
-
-
-```{r}
-
-tableOne_inter <- combined_table_wide %>%
-  group_by(variable, Demo_var, Demo_var_i) %>%
-  summarise(across(
-    starts_with("n_var"),
-    function(x) sum(x, na.rm = TRUE)
-  ), .groups = "drop")
-
-
-tableOne_raw <- tableOne_inter %>%
+tableOne_raw_thrombo <- tableOne_inter_thrombo %>%
   filter(Demo_var == "sex") %>%
   summarise(across(where(is.numeric), sum)) %>%
   data.frame(
@@ -360,7 +434,7 @@ tableOne_raw <- tableOne_inter %>%
     Demo_var_i = "All Patients",
     .
   ) %>%
-  bind_rows(tableOne_inter) %>%
+  bind_rows(tableOne_inter_thrombo) %>%
   mutate(
     N = rowSums(across(where(is.numeric))),
     Demo_var = factor(Demo_var, levels = ordered_vars)
@@ -382,7 +456,70 @@ tableOne_raw <- tableOne_inter %>%
   )) %>%
   rename("Table 1" = Demo_var_i) 
 
-tableOne_compiled <- tableOne_raw %>%
+tableOne_raw_neuro <- tableOne_inter_neuro %>%
+  filter(Demo_var == "sex") %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  data.frame(
+    variable = "all",
+    Demo_var = "all",
+    Demo_var_i = "All Patients",
+    .
+  ) %>%
+  bind_rows(tableOne_inter_neuro) %>%
+  mutate(
+    N = rowSums(across(where(is.numeric))),
+    Demo_var = factor(Demo_var, levels = ordered_vars)
+  ) %>%
+  group_by(Demo_var) %>%
+  mutate(across(
+    starts_with("n_var"),
+    function(x) {
+      paste0(x, " (", round(x / sum(x, na.rm = TRUE) * 100, 1), "%", ")")
+    }
+  )) %>%
+  ungroup() %>%
+  arrange(Demo_var) %>%
+  select(Demo_var_i, N, starts_with("n_var")) %>%
+  `colnames<-`(gsub(
+    x = names(.),
+    pattern = "n_var_",
+    replacement = ""
+  )) %>%
+  rename("Table 1" = Demo_var_i) 
+
+tableOne_raw_ARDs <- tableOne_inter_ARDs %>%
+  filter(Demo_var == "sex") %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  data.frame(
+    variable = "all",
+    Demo_var = "all",
+    Demo_var_i = "All Patients",
+    .
+  ) %>%
+  bind_rows(tableOne_inter_ARDs) %>%
+  mutate(
+    N = rowSums(across(where(is.numeric))),
+    Demo_var = factor(Demo_var, levels = ordered_vars)
+  ) %>%
+  group_by(Demo_var) %>%
+  mutate(across(
+    starts_with("n_var"),
+    function(x) {
+      paste0(x, " (", round(x / sum(x, na.rm = TRUE) * 100, 1), "%", ")")
+    }
+  )) %>%
+  ungroup() %>%
+  arrange(Demo_var) %>%
+  select(Demo_var_i, N, starts_with("n_var")) %>%
+  `colnames<-`(gsub(
+    x = names(.),
+    pattern = "n_var_",
+    replacement = ""
+  )) %>%
+  rename("Table 1" = Demo_var_i) 
+
+
+tableOne_compiled_thrombo <- tableOne_raw_thrombo %>%
   mutate(
     N = case_when(
       grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
@@ -393,10 +530,43 @@ tableOne_compiled <- tableOne_raw %>%
       TRUE ~ N
     )
   ) %>% 
-  rename('Survived' = `0`,
-         'Died' = `1`)
+  rename('No thrombotic events' = `FALSE`,
+         'Has thrombotic events' = `TRUE`)
 
-kbl(tableOne_compiled) %>%
+tableOne_compiled_neuro<- tableOne_raw_neuro %>%
+  mutate(
+    N = case_when(
+      grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
+      grepl("Median time to severe", `Table 1`) ~ get_table_n("Severe"),
+      grepl("death", `Table 1`) ~ get_table_n("Deceased"),
+      grepl("readmission", `Table 1`) ~ get_table_n("Readmitted"),
+      grepl("Median Elixhauser score", `Table 1`) ~ get_table_n("All Patients"),
+      TRUE ~ N
+    )
+  ) %>% 
+  rename('No neurological events' = `FALSE`,
+         'Has neurological events' = `TRUE`)
+
+tableOne_compiled_ARDs <- tableOne_raw_ARDs %>%
+  mutate(
+    N = case_when(
+      grepl("Median length of stay", `Table 1`) ~ get_table_n("All Patients"),
+      grepl("Median time to severe", `Table 1`) ~ get_table_n("Severe"),
+      grepl("death", `Table 1`) ~ get_table_n("Deceased"),
+      grepl("readmission", `Table 1`) ~ get_table_n("Readmitted"),
+      grepl("Median Elixhauser score", `Table 1`) ~ get_table_n("All Patients"),
+      TRUE ~ N
+    )
+  ) %>% 
+  rename('No ARDs events' = `FALSE`,
+         'Has ARDs events' = `TRUE`)
+
+tableOne_compiled_two = cbind(tableOne_compiled_thrombo,tableOne_compiled_neuro[,3:4])
+
+tableOne_compiled_all = cbind(tableOne_compiled_two,tableOne_compiled_ARDs[,3:4])
+
+
+kbl(tableOne_compiled_all) %>%
   kable_paper("striped", full_width = F) %>%
   pack_rows("Gender", 2, 3) %>%
   pack_rows("Age", 4, 10) %>%
@@ -407,4 +577,45 @@ kbl(tableOne_compiled) %>%
   pack_rows("Survival", 22, 23) %>%
   pack_rows("Readmission", 18, 19) %>%
   {.}
+```
+
+
+## Table One, Death
+
+Please change `group_var` here to stratify patients differently.
+
+```{r}
+CurrSiteId = "UPENN"
+library(dplyr)
+obfus_tables <- get_tables(
+  demo_processed,
+  blur_abs = 0,
+  mask_thres = 10,
+  group_var = 'deceased'
+) %>%
+  lapply(function(x) mutate(x, site = CurrSiteId))
+```
+
+
+
+```{r}
+
+
+kbl(tableOne_compiled_all) %>%
+  kable_paper("striped", full_width = F) %>%
+  pack_rows("Gender", 2, 3) %>%
+  pack_rows("Age", 4, 10) %>%
+  pack_rows("Race & Ethnicity", 11, 17) %>%
+  # pack_rows("Comorbidites", 20, 20) %>%
+  # pack_rows("Hospital Course", 21, 21) %>%
+  pack_rows("Severity", 20, 21) %>%
+  pack_rows("Survival", 22, 23) %>%
+  pack_rows("Readmission", 18, 19) %>%
+  {.}
+
+save(tableOne_compiled_all,
+  file = "results/penn-results-table1.Rdata"
+)
+
+
 ```

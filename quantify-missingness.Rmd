@@ -44,7 +44,7 @@ demo_raw <-
   readr::read_csv(
     file.path(my_dir, "LocalPatientSummary.csv"),
     col_types = list(patient_num = readr::col_character()),
-    na = c("1900-01-01", "1/1/1900")
+    na = "1900-01-01"
   ) %>%
   mutate(
     across(ends_with("_date") & where(is.character), lubridate::mdy),     

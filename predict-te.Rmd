@@ -29,8 +29,8 @@ library(MCMCpack)
 
 my_dir <- "/users/emily/Downloads"
 
-#load beta from NWU:
-load("~/users/emily/Documents/4ce/public-data/beta_matrix2_nwu.Rdata")
+#load beta from NWU: located in package directory
+load("~/users/emily/Documents/4ce/missing-data-4ce/public-data/beta_matrix2_nwu.Rdata")
 apply_betas = beta_mat2
 
 
@@ -96,9 +96,9 @@ thrombo_codes <- read_csv("https://raw.githubusercontent.com/covidclinical/Phase
 
 #Generate list of neuro codes (obtained from neuro group)
 
-neuro_codes <- c("R41","R27","R42","G44","G03","G04","G72","M60","G61","G65","R43","G93","F29","G40","G45","G46","I60","I61","I62","I67","H54")
+neuro_codes <- c("R41","R27","R42","G44","G03","G04","G72","M60","G61","G65","R43","G93","F29","G40","G45","G46","I60","I61","I62","I67","H54","40","298","307","320","321","322","323","330","331","339","345","348","357","359","369","430","431","432")
 
-ARDs_codes <- c("J80")
+ARDs_codes <- c("J80","518")
 
 ```
 ```{r}
@@ -593,13 +593,6 @@ ARDs_boxplot_comb_penn <- topic_df %>%
   NULL
 
 ARDs_boxplot_comb_penn
-
-K=Modes(ind)[1]
-beta_mat <- apply_betas
-colnames(beta_mat) <- colnames(x_mat)
-rownames(beta_mat) <- paste("Topic", 1:K)
-heatmap((beta_mat), main = "Ordered",
-        col= colorRampPalette(brewer.pal(8, "Blues"))(25))
 
 
 ```

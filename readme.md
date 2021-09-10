@@ -2,6 +2,8 @@
 
 This repository performs missing data analysis on data at different sites and reports the results in the [`results/`](results/) folder.
 
+Please run quantify-missingness.Rmd, predict-TE.Rmd, and table-one.Rmd and send us your results!
+
 ## Repository structure
 
 ### Rmd files

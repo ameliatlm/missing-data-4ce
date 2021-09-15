@@ -4,6 +4,11 @@ author: Trang Le, Emily Getzen
 output: html_document
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+params:
+  data_dir: "/users/emily/Downloads"
+  my_dir: "/users/emily/Downloads"
+  dateFormat: "%d-%b-%y"
+  site: "Penn"
 ---
 ```{r setup}
 source('R/utils.R')
@@ -27,7 +32,7 @@ library(MCMCpack)
 
 #replace my_dir with the directory that contains your files
 
-my_dir <- "/users/emily/Downloads"
+my_dir <- params$my_dir
 
 #load beta from NWU: located in package directory
 load("~/users/emily/Documents/4ce/missing-data-4ce/public-data/beta_matrix2_nwu.Rdata")

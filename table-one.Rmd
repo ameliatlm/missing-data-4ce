@@ -4,6 +4,11 @@ author: Trang Le
 output: html_document
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+params:
+  data_dir: "/users/emily/Downloads"
+  my_dir: "/users/emily/Downloads"
+  dateFormat: "%d-%b-%y"
+  site: "Penn"
 ---
 
 ```{r setup, warning=FALSE, message=FALSE}
@@ -19,7 +24,7 @@ library(dplyr)
 
 
 ```{r warning=FALSE, message=FALSE}
-data_dir <- "/users/emily/Downloads/"
+data_dir <- params$data_dir
 
 theme_set(theme_bw() +
   theme(

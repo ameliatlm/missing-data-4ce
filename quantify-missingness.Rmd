@@ -4,6 +4,11 @@ author: Amelia Tan, Arianna Dagliati, Trang Le, Emily Getzen
 date: "29 July 2021"
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
+params:
+  data_dir: "/users/emily/Downloads"
+  my_dir: "/users/emily/Downloads"
+  dateFormat: "%d-%b-%y"
+  site: "Penn"
 ---
 ```{r setup}
 source("R/utils.R")
@@ -35,12 +40,12 @@ theme_update(
 
 #Read in local patient summary: Change data_dir to the folder where your data files are located
 
-data_dir <- "/users/emily/Downloads"
-my_dir <- "/users/emily/Downloads"
+data_dir <- params$data_dir
+my_dir <- params$my_dir
 
 #Change dateFormat to the date format of your data
 
-dateFormat <- "%d-%b-%y"
+dateFormat <- params$dateFormat
 
 demo_raw <-
   readr::read_csv(
@@ -164,11 +169,12 @@ for (i in 1:length(unique(patient_obs_wide$patient_num))) {
   }
 }
 
+
 dat_prop = colMeans(props)
 dat_sd_prop = apply(props,2,sd)
 dat_num = colMeans(avgs)
 dat_sd_num = apply(avgs,2,sd)
-site = rep("Penn",length(dat_prop))
+site = rep(params$site,length(dat_prop))
 df_prop = data.frame(Labs = colnames(avgs), Avg_Prop_Miss = dat_prop,sd = dat_sd_prop,Site=site)
 df_num = data.frame(Labs = colnames(avgs), Avg_Num_Miss = dat_num,sd = dat_sd_num,Site=site)
 
@@ -276,7 +282,7 @@ df_prop_diff_sex$Labs <- factor(df_prop_diff_sex$Labs,levels = labsPresent)
 
 
 df_prop_Sex = rbind(df_prop_M,df_prop_F)
-site = rep("Penn",nrow(df_prop_Sex))
+site = rep(params$site,nrow(df_prop_Sex))
 df_prop_Sex$Site = site
 df_prop_Sex_penn <- df_prop_Sex
 
@@ -292,7 +298,7 @@ prop_plot_Sex = ggplot(data = df_prop_Sex,
 prop_plot_Sex
 
 df_prop_diff_sex_penn = df_prop_diff_sex
-Site = rep("Penn",nrow(df_prop_diff_sex_penn))
+Site = rep(params$site,nrow(df_prop_diff_sex_penn))
 df_prop_diff_sex_penn$site = Site
 
 
@@ -368,7 +374,7 @@ df_prop_diff_severity$Labs <- factor(df_prop_diff_severity$Labs,levels = labsPre
 
 
 df_prop_Severity = rbind(df_prop_S,df_prop_NS)
-site = rep("Penn",nrow(df_prop_Severity))
+site = rep(params$site,nrow(df_prop_Severity))
 df_prop_Severity$Site = site
 
 prop_plot_Severity = ggplot(data = df_prop_Severity,
@@ -385,7 +391,7 @@ prop_plot_Severity
 df_prop_Severity_penn = df_prop_Severity
 
 df_prop_diff_Severity_penn = df_prop_diff_severity
-Site = rep("Penn",nrow(df_prop_diff_Severity_penn))
+Site = rep(params$site,nrow(df_prop_diff_Severity_penn))
 df_prop_diff_Severity_penn$site = Site
 
 

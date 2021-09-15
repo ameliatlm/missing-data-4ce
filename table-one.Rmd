@@ -416,7 +416,7 @@ tableOne_raw <- tableOne_inter %>%
   )) %>%
   ungroup() %>%
   arrange(Demo_var) %>%
-  select(Demo_var_i, N, starts_with("n_var")) %>%
+  dplyr::select(Demo_var_i, N, starts_with("n_var")) %>%
   `colnames<-`(gsub(
     x = names(.),
     pattern = "n_var_",
@@ -448,7 +448,7 @@ tableOne_raw_thrombo <- tableOne_inter_thrombo %>%
   )) %>%
   ungroup() %>%
   arrange(Demo_var) %>%
-  select(Demo_var_i, N, starts_with("n_var")) %>%
+  dplyr::select(Demo_var_i, N, starts_with("n_var")) %>%
   `colnames<-`(gsub(
     x = names(.),
     pattern = "n_var_",
@@ -479,7 +479,7 @@ tableOne_raw_neuro <- tableOne_inter_neuro %>%
   )) %>%
   ungroup() %>%
   arrange(Demo_var) %>%
-  select(Demo_var_i, N, starts_with("n_var")) %>%
+  dplyr::select(Demo_var_i, N, starts_with("n_var")) %>%
   `colnames<-`(gsub(
     x = names(.),
     pattern = "n_var_",
@@ -510,7 +510,7 @@ tableOne_raw_ARDs <- tableOne_inter_ARDs %>%
   )) %>%
   ungroup() %>%
   arrange(Demo_var) %>%
-  select(Demo_var_i, N, starts_with("n_var")) %>%
+  dplyr::select(Demo_var_i, N, starts_with("n_var")) %>%
   `colnames<-`(gsub(
     x = names(.),
     pattern = "n_var_",

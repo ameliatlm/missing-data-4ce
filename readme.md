@@ -45,4 +45,6 @@ Once everything runs, please hit the "Knit" button on top of the `.Rmd` file to 
 
 Finally, please upload your results (in [`results/`](results/) and [`htmls/`](htmls/)) via a [pull request](https://github.com/ameliatlm/missing-data-4ce/pulls) or request @ameliatlm to add you as a contributor.
 
+Please also repeat these instructions for predict-TE.Rmd and table-one.Rmd! Starting with making a copy of the .Rmd file. 
+
 If you run into any problem adapting this code to your data, let us @ameliatlm know via Slack or [submit an issue](https://github.com/ameliatlm/missing-data-4ce/issues/new).

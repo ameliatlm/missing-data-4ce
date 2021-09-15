@@ -79,10 +79,6 @@ demo_raw <-
     )
   )
 
-course <- 
-  readr::read_csv(
-    file.path(my_dir, "clinicalcourse-upenn.csv"),
-  )
 
 
 ```

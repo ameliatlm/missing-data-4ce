@@ -383,6 +383,9 @@ heatmap((beta_mat), main = "Ordered",
 legend(x="topleft", legend=c("min", "ave", "max"), 
      fill=colorRampPalette(brewer.pal(8, "Blues"))(3))
 save(all_evals, beta_mat2, file = "results/beta_matrix_penn.Rdata")
+
+labs_penn = stmfit$vocab
+
 ```
 
 ```{r}
@@ -607,7 +610,7 @@ Run All (not Knit).
 Please share a screenshot of the result if possible!
 You may have to install the tm package with `install.packages('tm')`.
 ```{r}
-save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,Severity_results_penn,Neuro_results_penn,ARDs_results_penn,TE_results_comb_penn,Severity_results_comb_penn,Neuro_results_comb_penn,ARDs_results_comb_penn,stmfit_beta_penn,
+save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,Severity_results_penn,Neuro_results_penn,ARDs_results_penn,TE_results_comb_penn,Severity_results_comb_penn,Neuro_results_comb_penn,ARDs_results_comb_penn,stmfit_beta_penn,labs_penn,beta_mat,
   file = "results/penn-results-predict-te.Rdata"
 )
 

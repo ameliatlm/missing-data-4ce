@@ -619,14 +619,14 @@ save(topic_diagnostics,topicQuality,TE_results,Severity_results,Neuro_results,AR
   file = paste("results",params$results_file,sep=""))
 
 ggsave('figs/topic_diagnostics_plot.png', topic_diagnostics_plot)
-ggsave('figs/TE_boxplot.png', TE_boxplot_penn)
-ggsave('figs/Severity_boxplot.png', Severity_boxplot_penn)
-ggsave('figs/Neuro_boxplot.png', Neuro_boxplot_penn)
-ggsave('figs/ARDs_boxplot.png', ARDs_boxplot_penn)
-ggsave('figs/TE_boxplot_comb.png', TE_boxplot_comb_penn)
-ggsave('figs/Severity_boxplot_comb.png', Severity_boxplot_comb_penn)
-ggsave('figs/Neuro_boxplot_comb.png', Neuro_boxplot_comb_penn)
-ggsave('figs/ARDs_boxplot_comb.png', ARDs_boxplot_comb_penn)
+ggsave('figs/TE_boxplot.png', TE_boxplot)
+ggsave('figs/Severity_boxplot.png', Severity_boxplot)
+ggsave('figs/Neuro_boxplot.png', Neuro_boxplot)
+ggsave('figs/ARDs_boxplot.png', ARDs_boxplot)
+ggsave('figs/TE_boxplot_comb.png', TE_boxplot_comb)
+ggsave('figs/Severity_boxplot_comb.png', Severity_boxplot_comb)
+ggsave('figs/Neuro_boxplot_comb.png', Neuro_boxplot_comb)
+ggsave('figs/ARDs_boxplot_comb.png', ARDs_boxplot_comb)
 
 
 

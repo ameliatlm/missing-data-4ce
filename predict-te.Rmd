@@ -6,9 +6,9 @@ knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 params:
   data_dir: "/users/emily/Downloads"
-  my_dir: "/users/emily/Downloads"
+  package_dir: "/users/emily/Documents/4ce/missing-data-4ce"
+  results_file: "/penn_results-predict-te.Rdata"
   dateFormat: "%d-%b-%y"
-  site: "Penn"
 ---
 ```{r setup}
 source('R/utils.R')
@@ -32,10 +32,10 @@ library(MCMCpack)
 
 #replace my_dir with the directory that contains your files
 
-my_dir <- params$my_dir
+my_dir <- params$data_dir
 
 #load beta from NWU: located in package directory
-load("~/users/emily/Documents/4ce/missing-data-4ce/public-data/beta_matrix2_nwu.Rdata")
+load(paste(params$package_dir,"/public-data/beta_matrix2_nwu.Rdata",sep=""))
 apply_betas = beta_mat2
 
 
@@ -79,10 +79,6 @@ demo_raw <-
     )
   )
 
-course <- 
-  readr::read_csv(
-    file.path(my_dir, "clinicalcourse-upenn.csv"),
-  )
 
 
 ```
@@ -202,17 +198,24 @@ missing_by_patient <- patient_obs_wide %>%
   })) %>%
   left_join(demo_df, by = "patient_num")
 
+if ("DDU" %in% colnames(missing_by_patient)){
+  colnames(missing_by_patient)[which(colnames(missing_by_patient)=="DDU")] <- "D_Dimer"
+}
+
 if ("FEU" %in% colnames(missing_by_patient)) {
-  colnames(missing_by_patient)[which(colnames(missing_by_patient)=="FEU")] <- "DDU"
+  if ("D-Dimer" %in% colnames(missing_by_patient)) {
+    missing_by_patient$D_Dimer = missing_by_patient$FEU +   missing_by_patient$D_Dimer
+  }else{
+  colnames(missing_by_patient)[which(colnames(missing_by_patient)=="FEU")] <- "D_Dimer"
+  }
 }
 
 missing_by_patient$Troponin = missing_by_patient$Troponin_high +   missing_by_patient$Troponin_normal
 
 drops = c("Troponin_high","Troponin_normal")
-
 missing_by_patient= missing_by_patient[,!(names(missing_by_patient) %in% drops)]
 
-allLabs <- c("Fibrinogen","Procalcitonin","DDU","Troponin","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
+allLabs <- c("Fibrinogen","Procalcitonin","D_Dimer","Troponin","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")
 labsPresent <- allLabs[ allLabs %in% colnames(missing_by_patient)]
 
 lab_names = labsPresent
@@ -317,9 +320,8 @@ Modes <- function(x) {
 
 Modes(ind)
 
-topic_diagnostics_penn = topic_diagnostics
         
-                                                                                                             topic_diagnostics_plot = k_result %>%
+                                                                      topic_diagnostics_plot = k_result %>%
   transmute(K,
     `Lower bound` = lbound,
     Residuals = map_dbl(residual, "dispersion"),
@@ -341,7 +343,6 @@ topic_diagnostics_penn = topic_diagnostics
 
 topic_diagnostics_plot
 
-topic_diagnostics_plot_penn = topic_diagnostics_plot
 
 
 
@@ -362,7 +363,7 @@ We want to: maximize likelihood, lower bound, semantic coherence and minimize re
 
 K <- Modes(ind)[1]
 stmfit <- stm(x_dfm, K = K, verbose = FALSE, init.type = "Spectral", seed = TRUE)
-stmfit_beta_penn <- stmfit$beta
+stmfit_beta <- stmfit$beta
 
 
 
@@ -370,7 +371,7 @@ stmfit_beta_penn <- stmfit$beta
 
 ```{r}
 
-topicQuality_penn = topicQuality(stmfit, documents = x_dfm)
+topicQuality = topicQuality(stmfit, documents = x_dfm)
 ```
 
 The darker the colors, the more the presence of that lab values contribute to that topic.
@@ -387,9 +388,8 @@ heatmap((beta_mat), main = "Ordered",
         col= colorRampPalette(brewer.pal(8, "Blues"))(25))
 legend(x="topleft", legend=c("min", "ave", "max"), 
      fill=colorRampPalette(brewer.pal(8, "Blues"))(3))
-save(all_evals, beta_mat2, file = "results/beta_matrix_penn.Rdata")
 
-labs_penn = stmfit$vocab
+labs = stmfit$vocab
 
 ```
 
@@ -407,13 +407,13 @@ corrFunc <- function(var1, var2) {
 theta <- stmfit$theta
 K = Modes(ind)[1]
 
-TE_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
+TE_results <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
 
-Severity_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
+Severity_results <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
 
-Neuro_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro))[c("estimate","p.value","statistic","method")])
+Neuro_results <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro))[c("estimate","p.value","statistic","method")])
 
-ARDs_results_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$ARDs))[c("estimate","p.value","statistic","method")])
+ARDs_results <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$ARDs))[c("estimate","p.value","statistic","method")])
 
 
 ```
@@ -429,7 +429,7 @@ topic_df <- data.frame(theta, te = missing_by_patient$TE) %>%
   pivot_longer(- te, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-TE_boxplot_penn <- topic_df %>% 
+TE_boxplot <- topic_df %>% 
   ggplot(aes(x = te, y = value)) +
   labs(
     x = "Thrombotic Event",
@@ -439,7 +439,7 @@ TE_boxplot_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-TE_boxplot_penn
+TE_boxplot
 
 
 #Severity
@@ -448,7 +448,7 @@ topic_df <- data.frame(theta, Severity = missing_by_patient$severe) %>%
   pivot_longer(- Severity, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-Severity_boxplot_penn <- topic_df %>% 
+Severity_boxplot <- topic_df %>% 
   ggplot(aes(x = Severity, y = value)) +
   labs(
     x = "Severity",
@@ -458,7 +458,7 @@ Severity_boxplot_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-Severity_boxplot_penn
+Severity_boxplot
 
 #Neuro
 
@@ -466,7 +466,7 @@ topic_df <- data.frame(theta, Neuro = missing_by_patient$Neuro) %>%
   pivot_longer(- Neuro, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-Neuro_boxplot_penn <- topic_df %>% 
+Neuro_boxplot <- topic_df %>% 
   ggplot(aes(x = Neuro, y = value)) +
   labs(
     x = "Neurological Event",
@@ -476,7 +476,7 @@ Neuro_boxplot_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-Neuro_boxplot_penn
+Neuro_boxplot
 
 #ARDs
 
@@ -484,7 +484,7 @@ topic_df <- data.frame(theta, ARDs = missing_by_patient$ARDs) %>%
   pivot_longer(- ARDs, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-ARDs_boxplot_penn <- topic_df %>% 
+ARDs_boxplot <- topic_df %>% 
   ggplot(aes(x = ARDs, y = value)) +
   labs(
     x = "Acute Respiratory Distress",
@@ -494,7 +494,7 @@ ARDs_boxplot_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-ARDs_boxplot_penn
+ARDs_boxplot
 
 ```
 ```{r}
@@ -521,13 +521,13 @@ theta = actual_props
 
 K = 6
 
-TE_results_comb_penn<- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
+TE_results_comb<- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$TE))[c("estimate","p.value","statistic","method")])
 
-Severity_results_comb_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
+Severity_results_comb <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$severe))[c("estimate","p.value","statistic","method")])
 
-Neuro_results_comb_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro))[c("estimate","p.value","statistic","method")])
+Neuro_results_comb <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$Neuro))[c("estimate","p.value","statistic","method")])
 
-ARDs_results_comb_penn <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$ARDs))[c("estimate","p.value","statistic","method")])
+ARDs_results_comb <- lapply(1:K, function(x) cor.test(theta[, x], as.numeric(missing_by_patient$ARDs))[c("estimate","p.value","statistic","method")])
 
 #TE 
 
@@ -535,7 +535,7 @@ topic_df <- data.frame(theta, te = missing_by_patient$TE) %>%
   pivot_longer(- te, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-TE_boxplot_comb_penn <- topic_df %>% 
+TE_boxplot_comb <- topic_df %>% 
   ggplot(aes(x = te, y = value)) +
   labs(
     x = "Thrombotic Event",
@@ -545,7 +545,7 @@ TE_boxplot_comb_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-TE_boxplot_comb_penn
+TE_boxplot_comb
 
 
 #Severity
@@ -554,7 +554,7 @@ topic_df <- data.frame(theta, Severity = missing_by_patient$severe) %>%
   pivot_longer(- Severity, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-Severity_boxplot_comb_penn <- topic_df %>% 
+Severity_boxplot_comb <- topic_df %>% 
   ggplot(aes(x = Severity, y = value)) +
   labs(
     x = "Severity",
@@ -564,7 +564,7 @@ Severity_boxplot_comb_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-Severity_boxplot_comb_penn
+Severity_boxplot_comb
 
 #Neuro
 
@@ -572,7 +572,7 @@ topic_df <- data.frame(theta, Neuro = missing_by_patient$Neuro) %>%
   pivot_longer(- Neuro, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-Neuro_boxplot_comb_penn <- topic_df %>% 
+Neuro_boxplot_comb <- topic_df %>% 
   ggplot(aes(x = Neuro, y = value)) +
   labs(
     x = "Neurological Event",
@@ -582,7 +582,7 @@ Neuro_boxplot_comb_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-Neuro_boxplot_comb_penn
+Neuro_boxplot_comb
 
 #ARDs
 
@@ -590,7 +590,7 @@ topic_df <- data.frame(theta, ARDs = missing_by_patient$ARDs) %>%
   pivot_longer(- ARDs, names_to = 'topic') %>% 
   mutate(topic = gsub('X', 'Topic ', topic))
 
-ARDs_boxplot_comb_penn <- topic_df %>% 
+ARDs_boxplot_comb <- topic_df %>% 
   ggplot(aes(x = ARDs, y = value)) +
   labs(
     x = "Acute Respiratory Distress",
@@ -600,7 +600,7 @@ ARDs_boxplot_comb_penn <- topic_df %>%
   facet_wrap(~ topic, scales = 'free') +
   NULL
 
-ARDs_boxplot_comb_penn
+ARDs_boxplot_comb
 
 
 ```
@@ -615,19 +615,18 @@ Run All (not Knit).
 Please share a screenshot of the result if possible!
 You may have to install the tm package with `install.packages('tm')`.
 ```{r}
-save(topic_diagnostics_penn,topicQuality_penn,TE_results_penn,Severity_results_penn,Neuro_results_penn,ARDs_results_penn,TE_results_comb_penn,Severity_results_comb_penn,Neuro_results_comb_penn,ARDs_results_comb_penn,stmfit_beta_penn,labs_penn,beta_mat,
-  file = "results/penn-results-predict-te.Rdata"
-)
+save(topic_diagnostics,topicQuality,TE_results,Severity_results,Neuro_results,ARDs_results,TE_results_comb,Severity_results_comb,Neuro_results_comb,ARDs_results_comb,stmfit_beta,beta_mat,labs,
+  file = paste("results",params$results_file,sep=""))
 
-ggsave('figs/topic_diagnostics_plot_penn.png', topic_diagnostics_plot)
-ggsave('figs/TE_boxplot_penn.png', TE_boxplot_penn)
-ggsave('figs/Severity_boxplot_penn.png', Severity_boxplot_penn)
-ggsave('figs/Neuro_boxplot_penn.png', Neuro_boxplot_penn)
-ggsave('figs/ARDs_boxplot_penn.png', ARDs_boxplot_penn)
-ggsave('figs/TE_boxplot_comb_penn.png', TE_boxplot_comb_penn)
-ggsave('figs/Severity_boxplot_comb_penn.png', Severity_boxplot_comb_penn)
-ggsave('figs/Neuro_boxplot_comb_penn.png', Neuro_boxplot_comb_penn)
-ggsave('figs/ARDs_boxplot_comb_penn.png', ARDs_boxplot_comb_penn)
+ggsave('figs/topic_diagnostics_plot.png', topic_diagnostics_plot)
+ggsave('figs/TE_boxplot.png', TE_boxplot_penn)
+ggsave('figs/Severity_boxplot.png', Severity_boxplot_penn)
+ggsave('figs/Neuro_boxplot.png', Neuro_boxplot_penn)
+ggsave('figs/ARDs_boxplot.png', ARDs_boxplot_penn)
+ggsave('figs/TE_boxplot_comb.png', TE_boxplot_comb_penn)
+ggsave('figs/Severity_boxplot_comb.png', Severity_boxplot_comb_penn)
+ggsave('figs/Neuro_boxplot_comb.png', Neuro_boxplot_comb_penn)
+ggsave('figs/ARDs_boxplot_comb.png', ARDs_boxplot_comb_penn)
 
 
 

@@ -6,7 +6,6 @@ knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "htmls") })
 params:
   data_dir: "/users/emily/Downloads"
-  my_dir: "/users/emily/Downloads"
   dateFormat: "%d-%b-%y"
   site: "Penn"
 ---

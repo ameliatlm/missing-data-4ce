@@ -8,10 +8,8 @@ Please run quantify-missingness.Rmd, predict-TE.Rmd, and table-one.Rmd and send 
 
 ### Rmd files
 
-- [quant-te.Rmd](quant-te.Rmd) quantifies the incidence prevalence of thrombotic events (with time)
 - [quantify-missingness.Rmd](quantify-missingness.Rmd) uses the {naniar} package to quickly generate figures of missing data information (avg proportion missing, demographic stratification, temporal analyses).
 - [predict-te.Rmd](predict-te.Rmd) performs LDA on matrix of number of valid lab values for each patient for the first 10 days of hospitalization and identifies correlation between each topic's value with the outcome (TE, AKI, Severity, Neuro).
-- [combine-sites.Rmd](combine-sites.Rmd) is an older script that compares early missingness descriptive statistics from different sites.
 - [table-one.Rmd](table-one.Rmd) will likely be used for descriptive papers for generating Table 1 of demographic statistics of patients with and without thrombotic events.
 
 ### Other files
@@ -40,7 +38,9 @@ and open the R project
 ```open missing-data-4ce.Rproj```
 
 and navigate to the newly created file (e.g. `quantify-missingness-penn.Rmd`) to modify the code to run on the data at your specific site.
-Please be sure to replace all instances of "penn" with your specific site name to streamline the downstream aggregation step.
+
+All you must do is change the params at the beginning of the .Rmd file. data_dir refers to the directory where your site's data is located, package_dir refers to the directory where the missing-data-4ce folder is located from cloning the package, dateFormat refers to the date format that your site uses, results_file should contain the name of your site instead of "penn", and site should be changed to the name of your site instead of "penn". 
+
 Once everything runs, please hit the "Knit" button on top of the `.Rmd` file to create an `.html` file that will automatically be put into [`htmls/`](htmls/).
 
 Finally, please upload your results (in [`results/`](results/) and [`htmls/`](htmls/)) via a [pull request](https://github.com/ameliatlm/missing-data-4ce/pulls) or request @ameliatlm to add you as a contributor.

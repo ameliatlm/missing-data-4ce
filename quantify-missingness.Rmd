@@ -8,6 +8,7 @@ params:
   data_dir: "/users/emily/Downloads"
   package_dir: "/users/emily/Documents/4ce/missing-data-4ce"
   results_file: "/penn_results_quantify-missingness.Rdata"
+
   dateFormat: "%d-%b-%y"
   site: "Penn"
 ---
@@ -44,9 +45,10 @@ theme_update(
 data_dir <- params$data_dir
 my_dir <- params$data_dir
 
+
 #Change dateFormat to the date format of your data
 
-dateFormat <- "%d-%b-%y"
+dateFormat <- params$dateFormat
 
 demo_raw <-
   readr::read_csv(
@@ -212,6 +214,7 @@ for (i in 1:length(unique(patient_obs_wide$patient_num))) {
   }
 }
 
+
 dat_prop = colMeans(props)
 dat_sd_prop = apply(props,2,sd)
 dat_num = colMeans(avgs)
@@ -344,6 +347,10 @@ Site = rep(params$site,nrow(df_prop_diff_sex))
 df_prop_diff_sex$site = Site
 
 
+Site = rep(params$site,nrow(df_prop_diff_sex))
+df_prop_diff_sex$site = Site
+
+
 prop_plot_diff_sex = ggplot(data = df_prop_diff_sex,
        aes(x = reorder(Labs,Avg_Prop_Miss),
            y = Avg_Prop_Miss,
@@ -432,8 +439,10 @@ prop_plot_Severity
 
 
 
+
 Site = rep(params$site,nrow(df_prop_diff_severity))
 df_prop_diff_severity$site = Site
+
 
 
 

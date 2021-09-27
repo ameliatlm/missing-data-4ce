@@ -125,20 +125,38 @@ patient_obs_wide <- patient_obs %>%
   dplyr::select(-severe)
 
 
-patient_obs_wide$Troponin = patient_obs_wide$Troponin_high + patient_obs_wide$Troponin_normal
-for (i in 1:length(patient_obs_wide$Troponin)){
-  if (!is.na(patient_obs_wide$Troponin_high[i]) && is.na(patient_obs_wide$Troponin_normal[i])) {
+
+ct = 0
+if ("Troponin_high" %in% colnames(patient_obs_wide)){
+  if ("Troponin_normal" %in% colnames(patient_obs_wide)) {
+    ct = ct + 1
+  }else{
+     colnames(patient_obs_wide)[which(colnames(patient_obs_wide)=="Troponin_high")] <- "Troponin"
+  }
+ 
+}
+
+if ("Troponin_normal" %in% colnames(patient_obs_wide)) {
+  if ("Troponin_high" %in% colnames(patient_obs_wide)) {
+    patient_obs_wide$Troponin = patient_obs_wide$Troponin_high +   patient_obs_wide$Troponin_normal
+    for (i in 1:length(patient_obs_wide$Troponin_high)){
+  if (!is.na(patient_obs_wide$Troponin_high[i]) | !is.na(patient_obs_wide$Troponin_normal[i])) {
+    patient_obs_wide$Troponin[i] = 1
+  }
+  else {
     patient_obs_wide$Troponin[i] = patient_obs_wide$Troponin_high[i]
   }
-  if (is.na(patient_obs_wide$Troponin_high[i]) && !is.na(patient_obs_wide$Troponin_normal[i])) {
-    patient_obs_wide$Troponin[i] = patient_obs_wide$Troponin_normal[i]
-  }
-  if (is.na(patient_obs_wide$Troponin_high[i]) && is.na(patient_obs_wide$Troponin_normal[i])) {
-    patient_obs_wide$Troponin[i] = patient_obs_wide$Troponin_normal[i]
+}
+  }else{
+  colnames(patient_obs_wide)[which(colnames(patient_obs_wide)=="Troponin_normal")] <- "Troponin"
   }
 }
+
 drops = c("Troponin_high","Troponin_normal")
 patient_obs_wide= patient_obs_wide[,!(names(patient_obs_wide) %in% drops)]
+
+
+
 
 ct = 0
 if ("DDU" %in% colnames(patient_obs_wide)){

@@ -198,8 +198,29 @@ missing_by_patient <- patient_obs_wide %>%
   })) %>%
   left_join(demo_df, by = "patient_num")
 
+ct = 0
+if ("Troponin_high" %in% colnames(missing_by_patient)){
+  if ("Troponin_normal" %in% colnames(missing_by_patient)){
+    ct = ct + 1
+  }else{
+  colnames(missing_by_patient)[which(colnames(missing_by_patient)=="Troponin_high")] <- "Troponin"
+  }
+}
+
+if ("Troponin_normal" %in% colnames(missing_by_patient)) {
+  if ("Troponin_high" %in% colnames(missing_by_patient)) {
+    missing_by_patient$Troponin = missing_by_patient$Troponin_normal +   missing_by_patient$Troponin_high
+  }else{
+  colnames(missing_by_patient)[which(colnames(missing_by_patient)=="Troponin_normal")] <- "Troponin"
+  }
+}
+
 if ("DDU" %in% colnames(missing_by_patient)){
+  if ("FEU" %in% colnames(missing_by_patient)) {
+    ct = ct + 1
+  }else{
   colnames(missing_by_patient)[which(colnames(missing_by_patient)=="DDU")] <- "D_Dimer"
+  }
 }
 
 if ("FEU" %in% colnames(missing_by_patient)) {
@@ -210,9 +231,8 @@ if ("FEU" %in% colnames(missing_by_patient)) {
   }
 }
 
-missing_by_patient$Troponin = missing_by_patient$Troponin_high +   missing_by_patient$Troponin_normal
 
-drops = c("Troponin_high","Troponin_normal")
+drops = c("Troponin_high","Troponin_normal","FEU","DDU")
 missing_by_patient= missing_by_patient[,!(names(missing_by_patient) %in% drops)]
 
 allLabs <- c("Fibrinogen","Procalcitonin","D_Dimer","Troponin","CRP","Ferritin","LDH","Lymphocyte","PT","Albumin","Neutrophil","AST","ALT","Bilirubin","Leukocytes","Creatinine")

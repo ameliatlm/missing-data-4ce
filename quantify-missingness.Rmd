@@ -1150,7 +1150,7 @@ sessionInfo()
 ```
 
 ```{r}
-save(df_prop,df_num,df_prop_Sex,df_prop_Severity,temporal,temporal_severe,temporal_nonsevere,longhaul_comb,longhaul,shorthaul_comb,shorthaul,props_quant,props_M_quant,props_F_quant,props_S_quant,props_NS_quant,samplesize,ssM,ssF,ssS,ssNS,
+save(df_prop,df_num,df_prop_Sex,df_prop_Severity,temporal,temporal_severe,temporal_nonsevere,longhaul_comb,longhaul,shorthaul_comb,shorthaul,props_quant,props_M_quant,props_F_quant,props_S_quant,props_NS_quant,
   file = paste("results",params$results_file,sep=""))
 
 ggsave('figs/prop_plot.png', prop_plot)

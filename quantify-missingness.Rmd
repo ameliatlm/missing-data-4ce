@@ -8,7 +8,6 @@ params:
   data_dir: "/users/emily/Downloads"
   package_dir: "/users/emily/Documents/4ce/missing-data-4ce"
   results_file: "/penn_results_quantify-missingness.Rdata"
-
   dateFormat: "%d-%b-%y"
   site: "Penn"
 ---
@@ -35,18 +34,16 @@ theme_update(
 )
 ```
 
-
+#You should not have to change anything other than the params in lines 7-12! 
 
 ## Read in files. Get TE patients and AKI patients. 
 ```{r warning=FALSE, message=FALSE}
 
-#Read in local patient summary: Change data_dir to the folder where your data files are located
+#Read in local patient summary: 
 
 data_dir <- params$data_dir
 my_dir <- params$data_dir
 
-
-#Change dateFormat to the date format of your data
 
 dateFormat <- params$dateFormat
 

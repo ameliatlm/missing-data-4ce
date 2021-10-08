@@ -256,7 +256,7 @@ missing_by_patient <- missing_by_patient[, uniq_vals > 1] %>%
 
 #Reduce dataframe to matrix with labs and values
 
-x_mat <- missing_by_patient[, allLabs]
+x_mat <- missing_by_patient[, labsPresent]
 ```
 
 ```{r}

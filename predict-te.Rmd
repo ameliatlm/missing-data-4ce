@@ -520,6 +520,18 @@ ARDs_boxplot
 ```{r}
 #Apply NWU topics to new data:
 
+remove = c()
+ct = 0
+for (i in 1:length(allLabs)){
+  if (allLabs[i] %in% labsPresent){
+    ct = ct + 1
+  }else{
+    remove = c(remove,allLabs[i])
+  }
+}
+
+apply_betas = apply_betas[,-(which(colnames(apply_betas)==remove))]
+
 make_matrix <- function(df,rownames = NULL){
   my_matrix <-  as.matrix(df)
   if(!is.null(rownames))
